@@ -6,11 +6,14 @@ import {
   createColumnHelper,
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
+  type PaginationState,
   type SortingState,
 } from "@tanstack/react-table"
 import { api } from "../../convex/_generated/api"
+import { Button } from "~/components/ui/button"
 import {
   Table,
   TableBody,
@@ -151,14 +154,20 @@ function LoadingTable() {
 export function OrdersTable() {
   const orders = useQuery(api.orders.queries.list)
   const [sorting, setSorting] = useState<SortingState>([{ id: "createdAt", desc: true }])
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 10,
+  })
 
   const table = useReactTable({
     data: orders ?? [],
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    onPaginationChange: setPagination,
     onSortingChange: setSorting,
-    state: { sorting },
+    state: { sorting, pagination },
   })
 
   if (!orders) {
@@ -188,65 +197,121 @@ export function OrdersTable() {
         <p className="text-xs text-muted-foreground">Click a column to sort</p>
       </header>
 
-      <Table className="min-w-[900px]">
-        <TableHeader className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/75">
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id} className="border-border/70">
-              {headerGroup.headers.map((header) => {
-                const isNumeric = numericColumns.has(header.column.id)
-                return (
-                  <TableHead
-                    key={header.id}
-                    className={cn(
-                      "h-11 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground",
-                      isNumeric && "text-right"
-                    )}
-                  >
-                    {header.isPlaceholder ? null : (
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex w-full items-center gap-1.5 rounded-md px-1 py-1 transition-colors hover:bg-muted/70",
-                          isNumeric && "justify-end"
-                        )}
-                        onClick={header.column.getToggleSortingHandler()}
-                      >
-                        <span>{flexRender(header.column.columnDef.header, header.getContext())}</span>
-                        <SortIcon direction={header.column.getIsSorted()} />
-                      </button>
-                    )}
-                  </TableHead>
-                )
-              })}
-            </TableRow>
-          ))}
-        </TableHeader>
+      <div className="overflow-x-auto">
+        <Table className="min-w-[900px]">
+          <TableHeader className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+            {table.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id} className="border-border/70">
+                {headerGroup.headers.map((header) => {
+                  const isNumeric = numericColumns.has(header.column.id)
+                  return (
+                    <TableHead
+                      key={header.id}
+                      className={cn(
+                        "h-11 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground",
+                        isNumeric && "text-right"
+                      )}
+                    >
+                      {header.isPlaceholder ? null : (
+                        <button
+                          type="button"
+                          className={cn(
+                            "flex w-full items-center gap-1.5 rounded-md px-1 py-1 transition-colors hover:bg-muted/70",
+                            isNumeric && "justify-end"
+                          )}
+                          onClick={header.column.getToggleSortingHandler()}
+                        >
+                          <span>{flexRender(header.column.columnDef.header, header.getContext())}</span>
+                          <SortIcon direction={header.column.getIsSorted()} />
+                        </button>
+                      )}
+                    </TableHead>
+                  )
+                })}
+              </TableRow>
+            ))}
+          </TableHeader>
 
-        <TableBody>
-          {table.getRowModel().rows.map((row, rowIndex) => (
-            <TableRow
-              key={row.id}
-              className={cn(
-                "border-border/70",
-                rowIndex % 2 === 0 ? "bg-background" : "bg-muted/15",
-                "hover:bg-muted/40"
-              )}
-            >
-              {row.getVisibleCells().map((cell) => {
-                const isNumeric = numericColumns.has(cell.column.id)
-                return (
-                  <TableCell
-                    key={cell.id}
-                    className={cn("px-3 py-3", isNumeric && "text-right tabular-nums")}
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
-                )
-              })}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          <TableBody>
+            {table.getRowModel().rows.map((row, rowIndex) => (
+              <TableRow
+                key={row.id}
+                className={cn(
+                  "border-border/70",
+                  rowIndex % 2 === 0 ? "bg-background" : "bg-muted/15",
+                  "hover:bg-muted/40"
+                )}
+              >
+                {row.getVisibleCells().map((cell) => {
+                  const isNumeric = numericColumns.has(cell.column.id)
+                  return (
+                    <TableCell
+                      key={cell.id}
+                      className={cn("px-3 py-3", isNumeric && "text-right tabular-nums")}
+                    >
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
+                  )
+                })}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      <footer className="flex flex-col gap-3 border-t bg-muted/10 px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <label htmlFor="orders-page-size" className="font-medium text-foreground">
+            Rows per page
+          </label>
+          <select
+            id="orders-page-size"
+            className="h-8 rounded-md border bg-background px-2 text-xs text-foreground"
+            value={table.getState().pagination.pageSize}
+            onChange={(event) => {
+              table.setPageSize(Number(event.target.value))
+            }}
+          >
+            {[10, 20, 50].map((pageSize) => (
+              <option key={pageSize} value={pageSize}>
+                {pageSize}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span>
+            {table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1}-
+            {Math.min(
+              (table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize,
+              orders.length
+            )}{" "}
+            of {orders.length}
+          </span>
+          <span>
+            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => table.previousPage()}
+            disabled={!table.getCanPreviousPage()}
+          >
+            Previous
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => table.nextPage()}
+            disabled={!table.getCanNextPage()}
+          >
+            Next
+          </Button>
+        </div>
+      </footer>
     </section>
   )
 }

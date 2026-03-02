@@ -12,6 +12,7 @@ import type * as cron from "../cron.js";
 import type * as orders_mutations from "../orders/mutations.js";
 import type * as orders_queries from "../orders/queries.js";
 import type * as orders_sources_manapool from "../orders/sources/manapool.js";
+import type * as orders_sources_tcgplayer from "../orders/sources/tcgplayer.js";
 import type * as orders_sync from "../orders/sync.js";
 
 import type {
@@ -25,6 +26,7 @@ declare const fullApi: ApiFromModules<{
   "orders/mutations": typeof orders_mutations;
   "orders/queries": typeof orders_queries;
   "orders/sources/manapool": typeof orders_sources_manapool;
+  "orders/sources/tcgplayer": typeof orders_sources_tcgplayer;
   "orders/sync": typeof orders_sync;
 }>;
 
