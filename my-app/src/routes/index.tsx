@@ -1,18 +1,19 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { OrdersTable } from '../components/OrdersTable'
+import { createFileRoute } from "@tanstack/react-router"
+import { OrdersTable } from "../components/OrdersTable"
 
-export const Route = createFileRoute('/')({
+export const Route = createFileRoute("/")({
   component: Home,
 })
 
 function Home() {
   return (
-    <main className="p-8 flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Orders</h1>
+    <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-8 sm:px-6 lg:px-8">
+      <header className="space-y-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Orders</h1>
+        <p className="text-sm text-muted-foreground">Live order data from Convex.</p>
+      </header>
+
       <OrdersTable />
-      <p className="text-sm text-slate-600 dark:text-slate-300">
-        Live order data from Convex.
-      </p>
     </main>
   )
 }
