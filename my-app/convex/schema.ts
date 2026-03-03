@@ -11,6 +11,7 @@ export default defineSchema({
     status: v.string(), // "created", "purchased", "refunded"
     easypostShipmentId: v.string(),
     // Address verification
+    toAddress: v.optional(v.any()), // EasyPost to_address snapshot
     toAddressId: v.optional(v.string()),
     fromAddressId: v.optional(v.string()),
     addressVerified: v.optional(v.boolean()),
@@ -40,7 +41,8 @@ export default defineSchema({
     orderNumber: v.string(), // Manapool UUID (same for now, label is for shipping)
     channel: v.string(), // "manapool", "tcgplayer", "seeded"
     customerName: v.string(),
-    status: v.string(), // pending, processing, shipped, delivered, refunded, replaced
+    shippingStatus: v.optional(v.string()), // EasyPost when available, otherwise platform status
+    fulfillmentStatus: v.optional(v.boolean()), // internal flag set by our workflow
     shippingMethod: v.string(), // first_class, ground_advantage
     shippingAddress: v.object({
       name: v.string(),
@@ -74,6 +76,5 @@ export default defineSchema({
     })),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_status", ["status"])
-    .index("by_externalId", ["externalId"]),
+  }).index("by_externalId", ["externalId"]),
 });
