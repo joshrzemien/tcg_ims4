@@ -14,6 +14,11 @@ import type * as orders_queries from "../orders/queries.js";
 import type * as orders_sources_manapool from "../orders/sources/manapool.js";
 import type * as orders_sources_tcgplayer from "../orders/sources/tcgplayer.js";
 import type * as orders_sync from "../orders/sync.js";
+import type * as shipments_mutations from "../shipments/mutations.js";
+import type * as shipments_queries from "../shipments/queries.js";
+import type * as shipments_sources_easypost from "../shipments/sources/easypost.js";
+import type * as shipments_sync from "../shipments/sync.js";
+import type * as shipments_types from "../shipments/types.js";
 
 import type {
   ApiFromModules,
@@ -28,6 +33,11 @@ declare const fullApi: ApiFromModules<{
   "orders/sources/manapool": typeof orders_sources_manapool;
   "orders/sources/tcgplayer": typeof orders_sources_tcgplayer;
   "orders/sync": typeof orders_sync;
+  "shipments/mutations": typeof shipments_mutations;
+  "shipments/queries": typeof shipments_queries;
+  "shipments/sources/easypost": typeof shipments_sources_easypost;
+  "shipments/sync": typeof shipments_sync;
+  "shipments/types": typeof shipments_types;
 }>;
 
 /**

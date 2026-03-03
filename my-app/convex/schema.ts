@@ -6,6 +6,35 @@ import { v } from "convex/values";
 // app will continue to work.
 // The schema provides more precise TypeScript types.
 export default defineSchema({
+  shipments: defineTable({
+    orderId: v.optional(v.id("orders")),
+    status: v.string(), // "created", "purchased", "refunded"
+    easypostShipmentId: v.string(),
+    // Address verification
+    toAddressId: v.optional(v.string()),
+    fromAddressId: v.optional(v.string()),
+    addressVerified: v.optional(v.boolean()),
+    // Rates (stored after createShipment)
+    rates: v.optional(v.array(v.object({
+      rateId: v.string(),
+      carrier: v.string(),
+      service: v.string(),
+      rateCents: v.number(),
+      deliveryDays: v.optional(v.number()),
+    }))),
+    // Purchase data (populated after buyShipment)
+    trackingNumber: v.optional(v.string()),
+    labelUrl: v.optional(v.string()),
+    rateCents: v.optional(v.number()),
+    carrier: v.optional(v.string()),
+    service: v.optional(v.string()),
+    easypostTrackerId: v.optional(v.string()),
+    // Refund
+    refundStatus: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_orderId", ["orderId"])
+    .index("by_easypostShipmentId", ["easypostShipmentId"]),
   orders: defineTable({
     externalId: v.string(), // Manapool UUID
     orderNumber: v.string(), // Manapool UUID (same for now, label is for shipping)
