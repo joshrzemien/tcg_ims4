@@ -1,5 +1,14 @@
-export function normalizeShippingStatus(status: unknown): string {
-  if (typeof status !== "string") return "unknown";
-  const normalized = status.trim().toLowerCase();
-  return normalized === "" ? "unknown" : normalized;
-}
+export {
+  compareShipmentTiming,
+  deriveOrderShippingStatus,
+  derivePlatformShippingStatus,
+  deriveShipmentShippingStatus,
+  SHIPPING_STATUS_VALUES,
+  formatShippingStatusLabel,
+  hasRefundedPostage,
+  isShippingStatus,
+  normalizeShippingStatus,
+  normalizeStatusToken,
+  pickLatestShipment,
+} from '../../shared/shippingStatus'
+export type { ShippingStatus } from '../../shared/shippingStatus'

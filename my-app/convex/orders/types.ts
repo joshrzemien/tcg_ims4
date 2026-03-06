@@ -1,3 +1,6 @@
+import type { ShippingStatus } from "../../shared/shippingStatus";
+import type { ShippingMethod } from "../../shared/shippingMethod";
+
 export type OrderChannel = "manapool" | "tcgplayer" | "seeded";
 
 export interface FetchOrdersOptions {
@@ -38,10 +41,10 @@ export interface OrderRecord {
   orderNumber: string;
   channel: OrderChannel;
   customerName: string;
-  status: string;
-  shippingStatus: string;
+  status: ShippingStatus;
+  shippingStatus: ShippingStatus;
   fulfillmentStatus?: boolean;
-  shippingMethod: string;
+  shippingMethod: ShippingMethod;
   shippingAddress: OrderAddressRecord;
   totalAmountCents: number;
   shippingCostCents: number;

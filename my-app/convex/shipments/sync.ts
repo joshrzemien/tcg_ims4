@@ -1,243 +1,574 @@
-// Refresh policy: ON_DEMAND
-// Triggered by: manual action (one-time historical import)
-// NOT on a cron
+// Historical import: ON_DEMAND
+// Live status refresh: hourly cron
 
-import { internalAction } from "../_generated/server";
-import { api, internal } from "../_generated/api";
-import { fetchManapoolOrders } from "../orders/sources/manapool";
-import { fetchTcgplayerOrders } from "../orders/sources/tcgplayer";
-import type { ActionCtx } from "../_generated/server";
-import type { OrderRecord } from "../orders/types";
+import { v } from 'convex/values'
+import { api, internal } from '../_generated/api'
+import { internalAction } from '../_generated/server'
+import { fetchManapoolOrders } from '../orders/sources/manapool'
+import { fetchTcgplayerOrders } from '../orders/sources/tcgplayer'
+import { deriveEasyPostShippingMethod } from '../../shared/shippingMethod'
+import {
+  deriveShipmentShippingStatus,
+  normalizeShippingStatus,
+} from '../utils/shippingStatus'
+import { getShipment } from './sources/easypost'
+import type { ActionCtx } from '../_generated/server'
+import type { OrderRecord } from '../orders/types'
+
+const DEFAULT_START_DATE = '2025-11-01T00:00:00.000Z'
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+type HistoricalOrder = {
+  _id: string
+  channel: string
+  orderNumber: string
+  customerName: string
+  shippingAddress: {
+    name: string
+    line1: string
+    line2?: string
+    city: string
+    state: string
+    postalCode: string
+    country: string
+  }
+  createdAt: number
+}
+
+type NormalizedAddress = {
+  street: string
+  city: string
+  state: string
+  zip: string
+  country: string
+}
+
+type NormalizedOrder = {
+  order: HistoricalOrder
+  createdAt: number
+  recipient: string
+  recipientTokens: Set<string>
+  address: NormalizedAddress
+}
+
+type CandidateScore = {
+  candidate: NormalizedOrder
+  score: number
+  timeDistanceMs: number
+  reasons: Array<string>
+}
+
+type StoredShipment = {
+  _id: string
+  orderId?: string
+  easypostShipmentId: string
+  status?: string
+  trackingStatus?: string
+  refundStatus?: string
+  trackingNumber?: string
+  labelUrl?: string
+  easypostTrackerId?: string
+  trackerPublicUrl?: string
+  createdAt?: number
+  updatedAt?: number
+}
 
 async function upsertOrdersInBatches(
   ctx: ActionCtx,
   orders: Array<OrderRecord>,
-  chunkSize = 25
+  chunkSize = 25,
 ) {
   for (let i = 0; i < orders.length; i += chunkSize) {
-    const batch = orders.slice(i, i + chunkSize);
-    await ctx.runMutation(internal.orders.mutations.upsertOrdersBatch, { orders: batch });
+    const batch = orders.slice(i, i + chunkSize)
+    await ctx.runMutation(internal.orders.mutations.upsertOrdersBatch, {
+      orders: batch,
+    })
   }
 }
 
+function parseDateArg(value: string | undefined, fallbackIso?: string): Date {
+  const source = value ?? fallbackIso
+  if (!source) {
+    throw new Error('Missing required date')
+  }
+
+  const parsed = new Date(source)
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid date: ${source}`)
+  }
+
+  return parsed
+}
+
+function createdAtMs(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function normalizeText(value: unknown): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function normalizeStreet(value: unknown): string {
+  const withoutUnit = normalizeText(value)
+    .replace(/\b(?:apartment|apt|unit|suite|ste|floor|fl)\b\s*\w*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const tokenMap: Record<string, string> = {
+    street: 'st',
+    avenue: 'ave',
+    road: 'rd',
+    boulevard: 'blvd',
+    drive: 'dr',
+    lane: 'ln',
+    court: 'ct',
+    place: 'pl',
+    circle: 'cir',
+    terrace: 'ter',
+    parkway: 'pkwy',
+    highway: 'hwy',
+    north: 'n',
+    south: 's',
+    east: 'e',
+    west: 'w',
+  }
+
+  return withoutUnit
+    .split(' ')
+    .filter(Boolean)
+    .map((token) => tokenMap[token] ?? token)
+    .join(' ')
+}
+
+function normalizePostalCode(value: unknown): string {
+  const text = String(value ?? '')
+  const usZip = text.match(/\d{5}/)?.[0]
+  return usZip ?? normalizeText(text)
+}
+
+function normalizeAddress(addr: {
+  street1?: string
+  line1?: string
+  city?: string
+  state?: string
+  zip?: string
+  postalCode?: string
+  country?: string
+}): NormalizedAddress {
+  return {
+    street: normalizeStreet(addr.street1 ?? addr.line1),
+    city: normalizeText(addr.city),
+    state: normalizeText(addr.state),
+    zip: normalizePostalCode(addr.zip ?? addr.postalCode),
+    country: normalizeText(addr.country),
+  }
+}
+
+function normalizeRecipient(value: unknown): string {
+  return normalizeText(value)
+}
+
+function recipientTokens(value: string): Set<string> {
+  return new Set(value.split(' ').filter((token) => token.length >= 2))
+}
+
+function hasRecipientOverlap(left: Set<string>, right: Set<string>): boolean {
+  for (const token of left) {
+    if (right.has(token)) return true
+  }
+  return false
+}
+
+function indexOrdersByField(
+  orders: Array<NormalizedOrder>,
+  field: keyof NormalizedAddress,
+) {
+  const index = new Map<string, Array<NormalizedOrder>>()
+
+  for (const order of orders) {
+    const key = order.address[field]
+    if (!key) continue
+    const existing = index.get(key) ?? []
+    existing.push(order)
+    index.set(key, existing)
+  }
+
+  return index
+}
+
+function candidatePoolForShipment(
+  byZip: Map<string, Array<NormalizedOrder>>,
+  byStreet: Map<string, Array<NormalizedOrder>>,
+  address: NormalizedAddress,
+): Array<NormalizedOrder> {
+  const pool = new Map<string, NormalizedOrder>()
+
+  for (const candidate of byZip.get(address.zip) ?? []) {
+    pool.set(candidate.order._id, candidate)
+  }
+
+  for (const candidate of byStreet.get(address.street) ?? []) {
+    pool.set(candidate.order._id, candidate)
+  }
+
+  return [...pool.values()]
+}
+
+function scoreCandidate(params: {
+  shipmentAddress: NormalizedAddress
+  shipmentRecipient: string
+  shipmentRecipientTokens: Set<string>
+  shipmentTime: number
+  order: NormalizedOrder
+  usedOrderIds: Set<string>
+  orderLookbackDays: number
+  orderLookaheadDays: number
+  maxTimeDistanceDays: number
+  preferUnlinkedOrders: boolean
+}): CandidateScore | null {
+  const {
+    shipmentAddress,
+    shipmentRecipient,
+    shipmentRecipientTokens,
+    shipmentTime,
+    order,
+    usedOrderIds,
+    orderLookbackDays,
+    orderLookaheadDays,
+    maxTimeDistanceDays,
+    preferUnlinkedOrders,
+  } = params
+
+  const orderTime = createdAtMs(order.createdAt)
+  const earliestOrderTime = shipmentTime - orderLookbackDays * MS_PER_DAY
+  const latestOrderTime = shipmentTime + orderLookaheadDays * MS_PER_DAY
+  if (orderTime < earliestOrderTime || orderTime > latestOrderTime) {
+    return null
+  }
+
+  const timeDistanceMs = Math.abs(orderTime - shipmentTime)
+  if (timeDistanceMs > maxTimeDistanceDays * MS_PER_DAY) {
+    return null
+  }
+
+  const streetMatches =
+    shipmentAddress.street !== '' &&
+    shipmentAddress.street === order.address.street
+  const zipMatches =
+    shipmentAddress.zip !== '' && shipmentAddress.zip === order.address.zip
+  const cityMatches =
+    shipmentAddress.city !== '' && shipmentAddress.city === order.address.city
+  const stateMatches =
+    shipmentAddress.state !== '' &&
+    shipmentAddress.state === order.address.state
+  const countryMatches =
+    shipmentAddress.country !== '' &&
+    order.address.country !== '' &&
+    shipmentAddress.country === order.address.country
+
+  const strongStreetZipMatch = streetMatches && zipMatches
+  const strongStreetCityStateMatch =
+    streetMatches && cityMatches && stateMatches
+  if (!strongStreetZipMatch && !strongStreetCityStateMatch) {
+    return null
+  }
+
+  let score = 0
+  const reasons: Array<string> = []
+
+  score += 40
+  reasons.push('street')
+  if (zipMatches) {
+    score += 30
+    reasons.push('zip')
+  }
+  if (cityMatches) {
+    score += 10
+    reasons.push('city')
+  }
+  if (stateMatches) {
+    score += 10
+    reasons.push('state')
+  }
+  if (countryMatches) {
+    score += 5
+    reasons.push('country')
+  }
+
+  if (shipmentRecipient && order.recipient) {
+    if (shipmentRecipient === order.recipient) {
+      score += 12
+      reasons.push('recipient_exact')
+    } else if (
+      hasRecipientOverlap(shipmentRecipientTokens, order.recipientTokens)
+    ) {
+      score += 6
+      reasons.push('recipient_partial')
+    }
+  }
+
+  const timeDistanceDays = timeDistanceMs / MS_PER_DAY
+  const timeBonus = Math.max(0, 18 - Math.floor(timeDistanceDays))
+  if (timeBonus > 0) {
+    score += timeBonus
+    reasons.push('time')
+  }
+
+  if (preferUnlinkedOrders && usedOrderIds.has(order.order._id)) {
+    score -= 8
+    reasons.push('reused_order')
+  }
+
+  return { candidate: order, score, timeDistanceMs, reasons }
+}
+
+function snapshotEasyPostAddress(addr: any) {
+  if (!addr || typeof addr !== 'object') return undefined
+  return {
+    id: addr.id,
+    name: addr.name,
+    company: addr.company,
+    street1: addr.street1,
+    street2: addr.street2,
+    city: addr.city,
+    state: addr.state,
+    zip: addr.zip,
+    country: addr.country,
+    phone: addr.phone,
+    email: addr.email,
+    residential: addr.residential,
+  }
+}
+
+function isTerminalShipmentStatus(status: unknown): boolean {
+  const canonical = normalizeShippingStatus(status)
+  return (
+    canonical === 'delivered' ||
+    canonical === 'return_to_sender' ||
+    canonical === 'failure' ||
+    canonical === 'error' ||
+    canonical === 'cancelled'
+  )
+}
+
 export const syncHistorical = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    const apiKey = process.env.EASYPOST_API_KEY!;
+  args: {
+    startDate: v.optional(v.string()),
+    endDate: v.optional(v.string()),
+    backfillOrders: v.optional(v.boolean()),
+    orderBatchSize: v.optional(v.number()),
+    orderLookbackDays: v.optional(v.number()),
+    orderLookaheadDays: v.optional(v.number()),
+    maxTimeDistanceDays: v.optional(v.number()),
+    minimumMatchScore: v.optional(v.number()),
+    requireUniqueTopScore: v.optional(v.boolean()),
+    preferUnlinkedOrders: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const apiKey = process.env.EASYPOST_API_KEY!
+    const startDate = parseDateArg(args.startDate, DEFAULT_START_DATE)
+    const endDate = args.endDate ? parseDateArg(args.endDate) : undefined
+    const backfillOrders = args.backfillOrders ?? true
+    const orderBatchSize = args.orderBatchSize ?? 25
+    const orderLookbackDays = args.orderLookbackDays ?? 45
+    const orderLookaheadDays = args.orderLookaheadDays ?? 3
+    const maxTimeDistanceDays = args.maxTimeDistanceDays ?? 45
+    const minimumMatchScore = args.minimumMatchScore ?? 85
+    const requireUniqueTopScore = args.requireUniqueTopScore ?? true
+    const preferUnlinkedOrders = args.preferUnlinkedOrders ?? true
 
-    // Fetch all shipments from EasyPost (paginated)
-    // Fetch all shipments from EasyPost (paginated)
-    let hasMore = true;
-    let beforeId: string | undefined;
-    const allShipments: Array<any> = [];
-
-    // Go back far enough to get everything
-    const startDate = new Date("2025-11-01T00:00:00Z");
+    let hasMore = true
+    let beforeId: string | undefined
+    const allShipments: Array<any> = []
 
     while (hasMore) {
-    const params = new URLSearchParams({
-        page_size: "100",
+      const params = new URLSearchParams({
+        page_size: '100',
         start_datetime: startDate.toISOString(),
-    });
-    if (beforeId) params.set("before_id", beforeId);
+      })
+      if (beforeId) params.set('before_id', beforeId)
 
-    const res = await fetch(
+      const res = await fetch(
         `https://api.easypost.com/v2/shipments?${params}`,
         {
-        headers: {
+          headers: {
             Authorization: `Bearer ${apiKey}`,
+          },
         },
+      )
+
+      if (!res.ok) {
+        throw new Error(
+          `EasyPost list failed: ${res.status} ${await res.text()}`,
+        )
+      }
+
+      const data = await res.json()
+      const pageShipments = (data.shipments ?? []).filter((shipment: any) => {
+        if (!endDate || !shipment.created_at) return true
+        return new Date(shipment.created_at).getTime() <= endDate.getTime()
+      })
+      allShipments.push(...pageShipments)
+
+      console.log(
+        `Page fetched: ${pageShipments.length} shipments kept, has_more: ${data.has_more}, total so far: ${allShipments.length}`,
+      )
+
+      const fetchedShipments = data.shipments ?? []
+      hasMore = data.has_more === true && fetchedShipments.length > 0
+      if (fetchedShipments.length > 0) {
+        beforeId = fetchedShipments[fetchedShipments.length - 1].id
+      }
+    }
+    console.log(`Fetched ${allShipments.length} shipments from EasyPost`)
+
+    if (backfillOrders) {
+      const [manapoolOrders, tcgplayerOrders] = await Promise.all([
+        fetchManapoolOrders({ since: startDate, batchDetails: true }),
+        fetchTcgplayerOrders({ since: startDate, batchDetails: true }),
+      ])
+
+      const backfilledOrders = [...manapoolOrders, ...tcgplayerOrders].filter(
+        (order) => {
+          if (!endDate) return true
+          return (
+            createdAtMs(order.createdAt) <=
+            endDate.getTime() + orderLookaheadDays * MS_PER_DAY
+          )
+        },
+      )
+
+      console.log(`Backfetched ${backfilledOrders.length} orders for matching`)
+      await upsertOrdersInBatches(ctx, backfilledOrders, orderBatchSize)
+    }
+
+    const orders = (await ctx.runQuery(
+      api.orders.queries.list,
+    )) as Array<HistoricalOrder>
+    const earliestOrderTime =
+      startDate.getTime() - orderLookbackDays * MS_PER_DAY
+    const latestOrderTime = endDate
+      ? endDate.getTime() + orderLookaheadDays * MS_PER_DAY
+      : Number.POSITIVE_INFINITY
+
+    const normalizedOrders = orders
+      .filter((order) => {
+        const createdAt = createdAtMs(order.createdAt)
+        return createdAt >= earliestOrderTime && createdAt <= latestOrderTime
+      })
+      .map((order) => {
+        const recipient = normalizeRecipient(
+          order.shippingAddress.name || order.customerName,
+        )
+        return {
+          order,
+          createdAt: createdAtMs(order.createdAt),
+          recipient,
+          recipientTokens: recipientTokens(recipient),
+          address: normalizeAddress({
+            line1: order.shippingAddress.line1,
+            city: order.shippingAddress.city,
+            state: order.shippingAddress.state,
+            postalCode: order.shippingAddress.postalCode,
+            country: order.shippingAddress.country,
+          }),
         }
-    );
+      })
 
-    if (!res.ok) {
-        throw new Error(`EasyPost list failed: ${res.status} ${await res.text()}`);
-    }
+    const ordersByZip = indexOrdersByField(normalizedOrders, 'zip')
+    const ordersByStreet = indexOrdersByField(normalizedOrders, 'street')
 
-    const data = await res.json();
-    const shipments = data.shipments ?? [];
-    allShipments.push(...shipments);
-
-    console.log(`Page fetched: ${shipments.length} shipments, has_more: ${data.has_more}, total so far: ${allShipments.length}`);
-
-    hasMore = data.has_more === true && shipments.length > 0;
-    if (shipments.length > 0) {
-        beforeId = shipments[shipments.length - 1].id;
-    }
-    }
-    console.log(`Fetched ${allShipments.length} shipments from EasyPost`);
-
-    // Backfill orders for the same historical window before matching shipments.
-    const [manapoolOrders, tcgplayerOrders] = await Promise.all([
-      fetchManapoolOrders({ since: startDate, batchDetails: true }),
-      fetchTcgplayerOrders({ since: startDate, batchDetails: true }),
-    ]);
-    const backfilledOrders = [...manapoolOrders, ...tcgplayerOrders];
-    console.log(`Backfetched ${backfilledOrders.length} orders for matching`);
-    await upsertOrdersInBatches(ctx, backfilledOrders);
-
-    // Get all orders to match against
-    const orders = await ctx.runQuery(api.orders.queries.list);
-
-    function normalizeText(value: unknown): string {
-      return String(value ?? "")
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-    }
-
-    function normalizeStreet(value: unknown): string {
-      const withoutUnit = normalizeText(value)
-        .replace(/\b(?:apartment|apt|unit|suite|ste|floor|fl)\b\s*\w*/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      const tokenMap: Record<string, string> = {
-        street: "st",
-        avenue: "ave",
-        road: "rd",
-        boulevard: "blvd",
-        drive: "dr",
-        lane: "ln",
-        court: "ct",
-        place: "pl",
-        circle: "cir",
-        terrace: "ter",
-        parkway: "pkwy",
-        highway: "hwy",
-        north: "n",
-        south: "s",
-        east: "e",
-        west: "w",
-      };
-
-      return withoutUnit
-        .split(" ")
-        .filter(Boolean)
-        .map((token) => tokenMap[token] ?? token)
-        .join(" ");
-    }
-
-    function normalizePostalCode(value: unknown): string {
-      const text = String(value ?? "");
-      const usZip = text.match(/\d{5}/)?.[0];
-      return usZip ?? normalizeText(text);
-    }
-
-    function normalizeAddress(addr: {
-      street1?: string;
-      line1?: string;
-      city?: string;
-      state?: string;
-      zip?: string;
-      postalCode?: string;
-    }) {
-      return {
-        street: normalizeStreet(addr.street1 ?? addr.line1),
-        city: normalizeText(addr.city),
-        state: normalizeText(addr.state),
-        zip: normalizePostalCode(addr.zip ?? addr.postalCode),
-      };
-    }
-
-    function buildAddressKeys(addr: {
-      street: string;
-      city: string;
-      state: string;
-      zip: string;
-    }): Array<string> {
-      const keys: Array<string> = [];
-      if (addr.street && addr.zip) keys.push(`${addr.street}|${addr.zip}`);
-      if (addr.street && addr.city && addr.state) {
-        keys.push(`${addr.street}|${addr.city}|${addr.state}`);
-      }
-      if (addr.street && addr.city) keys.push(`${addr.street}|${addr.city}`);
-      if (addr.street) keys.push(addr.street);
-      if (addr.zip && addr.city && addr.state) keys.push(`zip:${addr.zip}|${addr.city}|${addr.state}`);
-      if (addr.zip) keys.push(`zip:${addr.zip}`);
-      return keys;
-    }
-
-    const ordersByAddress = new Map<string, Array<any>>();
-    for (const order of orders) {
-      const normalized = normalizeAddress({
-        line1: order.shippingAddress.line1,
-        city: order.shippingAddress.city,
-        state: order.shippingAddress.state,
-        postalCode: order.shippingAddress.postalCode,
-      });
-      const keys = Array.from(new Set(buildAddressKeys(normalized)));
-      for (const key of keys) {
-        const existing = ordersByAddress.get(key) ?? [];
-        existing.push(order);
-        ordersByAddress.set(key, existing);
-      }
-    }
-
-    let matched = 0;
-    let unmatched = 0;
-    const usedOrderIds = new Set<string>();
-
-    function createdAtMs(value: unknown): number {
-      return typeof value === "number" && Number.isFinite(value) ? value : 0;
-    }
-
-    function snapshotEasyPostAddress(addr: any) {
-      if (!addr || typeof addr !== "object") return undefined;
-      return {
-        id: addr.id,
-        name: addr.name,
-        company: addr.company,
-        street1: addr.street1,
-        street2: addr.street2,
-        city: addr.city,
-        state: addr.state,
-        zip: addr.zip,
-        country: addr.country,
-        phone: addr.phone,
-        email: addr.email,
-        residential: addr.residential,
-      };
-    }
+    let matched = 0
+    let unmatched = 0
+    let weakMatches = 0
+    let ambiguousMatches = 0
+    const usedOrderIds = new Set<string>()
 
     for (const ep of allShipments) {
-      const toAddr = ep.to_address;
-      const normalized = normalizeAddress({
+      const toAddr = ep.to_address
+      const shipmentAddress = normalizeAddress({
         street1: toAddr?.street1,
         city: toAddr?.city,
         state: toAddr?.state,
         zip: toAddr?.zip,
-      });
-      const keys = buildAddressKeys(normalized);
-      let candidates: Array<any> | undefined;
-      for (const key of keys) {
-        const next = ordersByAddress.get(key);
-        if (next && next.length > 0) {
-          candidates = next;
-          break;
-        }
-      }
-      let order = null;
-      if (candidates && candidates.length > 0) {
-        const shipmentTime = ep.created_at ? new Date(ep.created_at).getTime() : Date.now();
-        const ranked = [...candidates].sort((a, b) => {
-          const aDiff = Math.abs(createdAtMs(a.createdAt) - shipmentTime);
-          const bDiff = Math.abs(createdAtMs(b.createdAt) - shipmentTime);
-          return aDiff - bDiff;
-        });
-        order =
-          ranked.find((candidate) => !usedOrderIds.has(String(candidate._id))) ??
-          ranked[0] ??
-          null;
-      }
+        country: toAddr?.country,
+      })
+      const shipmentRecipient = normalizeRecipient(toAddr?.name)
+      const shipmentRecipientSet = recipientTokens(shipmentRecipient)
+      const shipmentTime = ep.created_at
+        ? new Date(ep.created_at).getTime()
+        : Date.now()
 
-      const purchased = !!(ep.tracking_code && ep.postage_label?.label_url);
+      const candidatePool = candidatePoolForShipment(
+        ordersByZip,
+        ordersByStreet,
+        shipmentAddress,
+      )
+      const ranked = candidatePool
+        .map((candidate) =>
+          scoreCandidate({
+            shipmentAddress,
+            shipmentRecipient,
+            shipmentRecipientTokens: shipmentRecipientSet,
+            shipmentTime,
+            order: candidate,
+            usedOrderIds,
+            orderLookbackDays,
+            orderLookaheadDays,
+            maxTimeDistanceDays,
+            preferUnlinkedOrders,
+          }),
+        )
+        .filter((candidate): candidate is CandidateScore => candidate !== null)
+        .sort((left, right) => {
+          if (right.score !== left.score) return right.score - left.score
+          return left.timeDistanceMs - right.timeDistanceMs
+        })
+
+      const bestMatch = ranked.length > 0 ? ranked[0] : undefined
+      const runnerUp = ranked.length > 1 ? ranked[1] : undefined
+      const isStrongEnough =
+        bestMatch != null && bestMatch.score >= minimumMatchScore
+      const isAmbiguous =
+        requireUniqueTopScore &&
+        bestMatch != null &&
+        runnerUp != null &&
+        runnerUp.score === bestMatch.score &&
+        runnerUp.timeDistanceMs === bestMatch.timeDistanceMs
+
+      const order =
+        isStrongEnough && !isAmbiguous ? bestMatch.candidate.order : null
+
+      const trackingStatus =
+        ep.tracker && (ep.tracker.id != null || ep.tracker.status != null)
+          ? normalizeShippingStatus(ep.tracker.status)
+          : undefined
+      const refundStatus =
+        typeof ep.refund_status === 'string' ? ep.refund_status : undefined
+      const purchased = !!(ep.tracking_code && ep.postage_label?.label_url)
+      const status = deriveShipmentShippingStatus({
+        status: purchased ? 'purchased' : 'created',
+        trackingStatus,
+        refundStatus,
+        trackingNumber: ep.tracking_code,
+        labelUrl: ep.postage_label?.label_url,
+        easypostTrackerId: ep.tracker?.id,
+      })
+      const shippingMethod = deriveEasyPostShippingMethod({
+        carrier: ep.selected_rate?.carrier,
+        service: ep.selected_rate?.service,
+      })
 
       const shipment: any = {
         orderId: order?._id ?? undefined,
-        status: purchased ? "purchased" : "created",
+        status,
         easypostShipmentId: ep.id,
+        ...(shippingMethod && { shippingMethod }),
+        ...(trackingStatus && { trackingStatus }),
         addressVerified: true,
         toAddress: snapshotEasyPostAddress(toAddr),
         toAddressId: toAddr?.id,
@@ -250,28 +581,115 @@ export const syncHistorical = internalAction({
           ...(r.delivery_days != null && { deliveryDays: r.delivery_days }),
         })),
         ...(ep.tracking_code && { trackingNumber: ep.tracking_code }),
-        ...(ep.postage_label?.label_url && { labelUrl: ep.postage_label.label_url }),
+        ...(ep.postage_label?.label_url && {
+          labelUrl: ep.postage_label.label_url,
+        }),
         ...(ep.selected_rate?.rate && {
           rateCents: Math.round(parseFloat(ep.selected_rate.rate) * 100),
         }),
         ...(ep.selected_rate?.carrier && { carrier: ep.selected_rate.carrier }),
         ...(ep.selected_rate?.service && { service: ep.selected_rate.service }),
         ...(ep.tracker?.id && { easypostTrackerId: ep.tracker.id }),
-        createdAt: ep.created_at ? new Date(ep.created_at).getTime() : Date.now(),
+        ...(ep.tracker?.public_url && {
+          trackerPublicUrl: ep.tracker.public_url,
+        }),
+        ...(refundStatus && { refundStatus }),
+        createdAt: shipmentTime,
         updatedAt: Date.now(),
-      };
-
-      if (order) {
-        matched++;
-        usedOrderIds.add(String(order._id));
-      } else {
-        unmatched++;
-        console.warn(`No order match for shipment ${ep.id} to keys ${keys.join(", ")}`);
       }
 
-      await ctx.runMutation(internal.shipments.mutations.upsertShipment, { shipment });
+      if (order) {
+        matched++
+        usedOrderIds.add(order._id)
+      } else {
+        unmatched++
+
+        if (bestMatch == null) {
+          console.warn(`No order match for shipment ${ep.id}`)
+        } else if (!isStrongEnough) {
+          weakMatches++
+          console.warn(
+            `Rejected weak order match for shipment ${ep.id}: score=${bestMatch.score}, order=${bestMatch.candidate.order.orderNumber}, reasons=${bestMatch.reasons.join(',')}`,
+          )
+        } else if (isAmbiguous) {
+          ambiguousMatches++
+          console.warn(
+            `Rejected ambiguous order match for shipment ${ep.id}: top score=${bestMatch.score}, candidates=${ranked
+              .slice(0, 3)
+              .map((candidate) => candidate.candidate.order.orderNumber)
+              .join(', ')}`,
+          )
+        }
+      }
+
+      await ctx.runMutation(internal.shipments.mutations.upsertShipment, {
+        shipment,
+      })
     }
 
-    return { total: allShipments.length, matched, unmatched };
+    return {
+      total: allShipments.length,
+      matched,
+      unmatched,
+      weakMatches,
+      ambiguousMatches,
+    }
   },
-});
+})
+
+export const refreshActiveStatuses = internalAction({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const apiKey = process.env.EASYPOST_API_KEY!
+    const max = limit ?? 100
+    const shipments = (await ctx.runQuery(
+      api.shipments.queries.list,
+    )) as Array<StoredShipment>
+    const candidates = shipments
+      .filter(
+        (shipment) =>
+          shipment.orderId && !isTerminalShipmentStatus(shipment.status),
+      )
+      .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
+      .slice(0, max)
+
+    let updated = 0
+    let failed = 0
+
+    for (const shipment of candidates) {
+      try {
+        const latest = await getShipment(apiKey, shipment.easypostShipmentId)
+        await ctx.runMutation(internal.shipments.mutations.upsertShipment, {
+          shipment: {
+            orderId: shipment.orderId,
+            easypostShipmentId: latest.easypostShipmentId,
+            status: latest.status,
+            ...(latest.shippingMethod && {
+              shippingMethod: latest.shippingMethod,
+            }),
+            ...(latest.trackingStatus && {
+              trackingStatus: latest.trackingStatus,
+            }),
+            ...(latest.refundStatus && { refundStatus: latest.refundStatus }),
+            rates: latest.rates,
+            ...(latest.purchasedData ?? {}),
+            updatedAt: Date.now(),
+          },
+        })
+        updated += 1
+      } catch (error) {
+        failed += 1
+        console.error(
+          `Failed to refresh EasyPost shipment ${shipment.easypostShipmentId}:`,
+          error,
+        )
+      }
+    }
+
+    return {
+      scanned: candidates.length,
+      updated,
+      failed,
+    }
+  },
+})
