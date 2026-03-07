@@ -10,6 +10,8 @@ import { fetchTcgplayerOrders } from "./sources/tcgplayer";
 import type { ActionCtx } from "../_generated/server";
 import type { OrderRecord } from "./types";
 
+const CATALOG_LINK_BACKFILL_BATCH_SIZE = 50;
+
 async function upsertAll(ctx: ActionCtx, orders: Array<OrderRecord>) {
   for (const order of orders) {
     await ctx.runMutation(internal.orders.mutations.upsertOrder, { order });
@@ -59,5 +61,45 @@ export const syncArchive = internalAction({
     const allOrders = [...orders, ...tcgplayerOrders];
     await upsertAllDailyBatch(ctx, allOrders);
     return { synced: allOrders.length };
+  },
+});
+
+export const backfillCatalogLinks = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Catalog links should normally be assigned during order ingest. This backfill is
+    // for repair/manual recovery, not something catalog syncs should trigger.
+    let cursor: string | null = null;
+    let scanned = 0;
+    let updated = 0;
+    let pages = 0;
+    let isDone = false;
+
+    while (!isDone) {
+      // TODO: Keep this job coarse-grained and decoupled from per-set catalog syncs.
+      // Re-walking the entire orders table after each catalog set completion is high
+      // cost for low backfill value.
+      const result: {
+        continueCursor: string;
+        isDone: boolean;
+        scanned: number;
+        updated: number;
+      } = await ctx.runMutation(internal.orders.mutations.backfillCatalogLinks, {
+        cursor,
+        limit: CATALOG_LINK_BACKFILL_BATCH_SIZE,
+      });
+
+      scanned += result.scanned;
+      updated += result.updated;
+      pages += 1;
+      isDone = result.isDone;
+      cursor = result.isDone ? null : result.continueCursor;
+    }
+
+    return {
+      pages,
+      scanned,
+      updated,
+    };
   },
 });

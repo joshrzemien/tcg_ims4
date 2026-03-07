@@ -20,8 +20,97 @@ async function latestShipmentForOrder(ctx: { db: any }, orderId: any) {
   return pickLatestShipment<any>(shipments)
 }
 
+function normalizeProductId(productId: string | undefined): number | undefined {
+  if (typeof productId !== 'string' || productId.trim() === '') {
+    return undefined
+  }
+
+  const numericValue = Number(productId)
+  return Number.isFinite(numericValue) ? numericValue : undefined
+}
+
+async function enrichOrderItemsWithCatalogLinks(
+  ctx: { db: any },
+  items: Array<any>,
+) {
+  const skuMap = new Map<number, any>()
+  const productMap = new Map<number, any>()
+
+  const distinctSkus = [...new Set(
+    items
+      .map((item) =>
+        typeof item.tcgplayerSku === 'number' ? item.tcgplayerSku : undefined,
+      )
+      .filter((value): value is number => typeof value === 'number'),
+  )]
+  const distinctProductIds = [...new Set(
+    items
+      .map((item) => normalizeProductId(item.productId))
+      .filter((value): value is number => typeof value === 'number'),
+  )]
+
+  for (const tcgplayerSku of distinctSkus) {
+    const catalogSku = await ctx.db
+      .query('catalogSkus')
+      .withIndex('by_tcgplayerSku', (q: any) => q.eq('tcgplayerSku', tcgplayerSku))
+      .unique()
+
+    if (catalogSku) {
+      skuMap.set(tcgplayerSku, catalogSku)
+    }
+  }
+
+  for (const tcgplayerProductId of distinctProductIds) {
+    const catalogProduct = await ctx.db
+      .query('catalogProducts')
+      .withIndex('by_tcgplayerProductId', (q: any) =>
+        q.eq('tcgplayerProductId', tcgplayerProductId),
+      )
+      .unique()
+
+    if (catalogProduct) {
+      productMap.set(tcgplayerProductId, catalogProduct)
+    }
+  }
+
+  return items.map((item) => {
+    const productId = normalizeProductId(item.productId)
+    const catalogSku =
+      typeof item.tcgplayerSku === 'number'
+        ? skuMap.get(item.tcgplayerSku)
+        : undefined
+    const catalogProduct =
+      typeof productId === 'number' ? productMap.get(productId) : undefined
+
+    return {
+      ...item,
+      ...(catalogSku?.catalogProductKey
+        ? { catalogProductKey: catalogSku.catalogProductKey }
+        : catalogProduct?.key
+          ? { catalogProductKey: catalogProduct.key }
+          : {}),
+      ...(catalogSku?.key ? { catalogSkuKey: catalogSku.key } : {}),
+    }
+  })
+}
+
+function orderItemsNeedCatalogUpdate(currentItems: Array<any>, nextItems: Array<any>) {
+  if (currentItems.length !== nextItems.length) {
+    return true
+  }
+
+  return currentItems.some((item, index) => {
+    const nextItem = nextItems[index]
+    return (
+      item.catalogProductKey !== nextItem.catalogProductKey ||
+      item.catalogSkuKey !== nextItem.catalogSkuKey
+    )
+  })
+}
+
 async function upsertSingleOrder(ctx: { db: any }, order: any) {
   const { status: _ignoredStatus, ...orderRecord } = order
+  const enrichedItems = await enrichOrderItemsWithCatalogLinks(ctx, orderRecord.items)
 
   const existing = await ctx.db
     .query('orders')
@@ -38,6 +127,7 @@ async function upsertSingleOrder(ctx: { db: any }, order: any) {
     })
     const nextOrder = {
       ...orderRecord,
+      items: enrichedItems,
       shippingMethod,
       shippingStatus: deriveOrderShippingStatus({
         order: orderRecord,
@@ -57,6 +147,7 @@ async function upsertSingleOrder(ctx: { db: any }, order: any) {
     })
     const nextOrder = {
       ...orderRecord,
+      items: enrichedItems,
       shippingMethod,
       shippingStatus: deriveOrderShippingStatus({ order: orderRecord }),
       fulfillmentStatus:
@@ -128,6 +219,40 @@ export const backfillShippingMethods = mutation({
       scannedShipments: shipments.length,
       updatedOrders,
       updatedShipments,
+    }
+  },
+})
+
+export const backfillCatalogLinks = internalMutation({
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    limit: v.number(),
+  },
+  handler: async (ctx, { cursor, limit }) => {
+    const page = await ctx.db.query('orders').paginate({
+      cursor,
+      numItems: Math.max(1, Math.min(limit, 100)),
+    })
+    let updated = 0
+
+    for (const order of page.page) {
+      const nextItems = await enrichOrderItemsWithCatalogLinks(ctx, order.items)
+      if (!orderItemsNeedCatalogUpdate(order.items, nextItems)) {
+        continue
+      }
+
+      await ctx.db.patch('orders', order._id, {
+        items: nextItems,
+        updatedAt: Date.now(),
+      })
+      updated += 1
+    }
+
+    return {
+      continueCursor: page.continueCursor,
+      isDone: page.isDone,
+      scanned: page.page.length,
+      updated,
     }
   },
 })
