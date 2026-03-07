@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router"
+import { Package } from "lucide-react"
 import { OrdersTable } from "../components/OrdersTable"
 
 export const Route = createFileRoute("/")({
@@ -7,13 +8,22 @@ export const Route = createFileRoute("/")({
 
 function Home() {
   return (
-    <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-8 sm:px-6 lg:px-8">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Orders</h1>
-        <p className="text-sm text-muted-foreground">Live order data from Convex.</p>
+    <div className="flex min-h-screen flex-col">
+      <header className="sticky top-0 z-30 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+        <div className="mx-auto flex h-10 max-w-[1600px] items-center gap-3 px-4">
+          <Package className="size-4 text-muted-foreground" />
+          <h1 className="text-sm font-semibold tracking-tight text-foreground">
+            TCG Order Management
+          </h1>
+          <div className="ml-auto flex items-center gap-4">
+            <span className="text-xs text-muted-foreground">Dashboard</span>
+          </div>
+        </div>
       </header>
 
-      <OrdersTable />
-    </main>
+      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-3">
+        <OrdersTable />
+      </main>
+    </div>
   )
 }

@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-router'
 import * as React from 'react'
 import type { QueryClient } from '@tanstack/react-query'
+import { TooltipProvider } from '~/components/ui/tooltip'
 import appCss from '~/styles/app.css?url'
 
 export const Route = createRootRouteWithContext<{
@@ -21,7 +22,7 @@ export const Route = createRootRouteWithContext<{
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'TanStack Start Starter',
+        title: 'TCG Order Management',
       },
     ],
     links: [
@@ -66,7 +67,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body>
-        {children}
+        <TooltipProvider delayDuration={200}>
+          {children}
+        </TooltipProvider>
         <Scripts />
       </body>
     </html>

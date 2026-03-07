@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   createColumnHelper,
   flexRender,
@@ -7,8 +7,23 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { useAction, useQuery } from 'convex/react'
-import { ArrowDown, ArrowUp, ArrowUpDown, ExternalLink, X } from 'lucide-react'
+import { useAction, useMutation, useQuery } from 'convex/react'
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  CheckCircle2,
+  DollarSign,
+  ExternalLink,
+  Package,
+  Printer,
+  RefreshCw,
+  ShoppingCart,
+  Tag,
+  Truck,
+  Undo2,
+  X,
+} from 'lucide-react'
 import { api } from '../../convex/_generated/api'
 import { formatShippingMethodLabel } from '../../shared/shippingMethod'
 import {
@@ -16,7 +31,7 @@ import {
   hasRefundedPostage,
   normalizeStatusToken,
 } from '../../shared/shippingStatus'
-import type { PaginationState, SortingState } from '@tanstack/react-table'
+import type { PaginationState, RowSelectionState, SortingState } from '@tanstack/react-table'
 import type { Doc } from '../../convex/_generated/dataModel'
 import type { ShippingMethod } from '../../shared/shippingMethod'
 import type { ShippingStatus } from '../../shared/shippingStatus'
@@ -29,6 +44,11 @@ import {
   TableHeader,
   TableRow,
 } from '~/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '~/components/ui/tooltip'
 import { cn } from '~/lib/utils'
 
 type OrderRow = Omit<Doc<'orders'>, 'shippingStatus' | 'shippingMethod'> & {
@@ -76,6 +96,8 @@ type PurchaseQuote = {
   }
 }
 
+type PresetFilter = 'all' | 'last7' | 'last30' | 'unfulfilled' | 'not_delivered'
+
 type FlashMessage =
   | {
       kind: 'success' | 'error'
@@ -93,65 +115,72 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 const dateFormatter = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
-  year: 'numeric',
+  year: '2-digit',
 })
 
+// Muted, subtle status styles for the dense dashboard aesthetic
 const statusStyles: Record<ShippingStatus, string> = {
   pending:
-    'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200',
+    'border-amber-500/20 bg-amber-500/5 text-amber-400',
   processing:
-    'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200',
+    'border-blue-500/20 bg-blue-500/5 text-blue-400',
   created:
-    'border-cyan-200 bg-cyan-50 text-cyan-800 dark:border-cyan-500/40 dark:bg-cyan-500/10 dark:text-cyan-200',
+    'border-cyan-500/20 bg-cyan-500/5 text-cyan-400',
   purchased:
-    'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-200',
+    'border-sky-500/20 bg-sky-500/5 text-sky-400',
   pre_transit:
-    'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200',
+    'border-blue-500/20 bg-blue-500/5 text-blue-400',
   in_transit:
-    'border-indigo-200 bg-indigo-50 text-indigo-800 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200',
+    'border-indigo-500/20 bg-indigo-500/5 text-indigo-400',
   out_for_delivery:
-    'border-teal-200 bg-teal-50 text-teal-800 dark:border-teal-500/40 dark:bg-teal-500/10 dark:text-teal-200',
+    'border-teal-500/20 bg-teal-500/5 text-teal-400',
   shipped:
-    'border-indigo-200 bg-indigo-50 text-indigo-800 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200',
+    'border-indigo-500/20 bg-indigo-500/5 text-indigo-400',
   delivered:
-    'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200',
+    'border-emerald-500/20 bg-emerald-500/5 text-emerald-400',
   available_for_pickup:
-    'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200',
+    'border-emerald-500/20 bg-emerald-500/5 text-emerald-400',
   return_to_sender:
-    'border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-500/40 dark:bg-orange-500/10 dark:text-orange-200',
+    'border-orange-500/20 bg-orange-500/5 text-orange-400',
   failure:
-    'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200',
+    'border-red-500/20 bg-red-500/5 text-red-400',
   error:
-    'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200',
+    'border-red-500/20 bg-red-500/5 text-red-400',
   cancelled:
-    'border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-500/40 dark:bg-zinc-500/10 dark:text-zinc-200',
+    'border-zinc-500/20 bg-zinc-500/5 text-zinc-400',
   refunded:
-    'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200',
+    'border-red-500/20 bg-red-500/5 text-red-400',
   replaced:
-    'border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-200',
+    'border-violet-500/20 bg-violet-500/5 text-violet-400',
   unknown:
-    'border-slate-200 bg-slate-100 text-slate-800 dark:border-slate-500/40 dark:bg-slate-500/10 dark:text-slate-200',
+    'border-slate-500/20 bg-slate-500/5 text-slate-400',
 }
 
 const fulfillmentStyles = {
   fulfilled:
-    'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200',
+    'border-emerald-500/20 bg-emerald-500/5 text-emerald-400',
   unfulfilled:
-    'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200',
+    'border-amber-500/20 bg-amber-500/5 text-amber-400',
+}
+
+const channelStyles: Record<string, string> = {
+  tcgplayer: 'border-orange-500/20 bg-orange-500/5 text-orange-400',
+  manapool: 'border-violet-500/20 bg-violet-500/5 text-violet-400',
 }
 
 const numericColumns = new Set(['itemCount', 'totalAmountCents', 'createdAt'])
 const columnWidths: Partial<Record<string, string>> = {
-  orderNumber: 'w-[10rem] min-w-[10rem]',
-  channel: 'w-[7rem] min-w-[7rem]',
-  customerName: 'w-[14rem] min-w-[14rem]',
-  shippingStatus: 'w-[11rem] min-w-[11rem]',
-  fulfillmentStatus: 'w-[6rem] min-w-[6rem]',
-  shippingMethod: 'w-[7rem] min-w-[7rem]',
-  itemCount: 'w-[5rem] min-w-[5rem]',
-  totalAmountCents: 'w-[6.5rem] min-w-[6.5rem]',
-  createdAt: 'w-[8.5rem] min-w-[8.5rem]',
-  actions: 'w-[11rem] min-w-[11rem]',
+  select: 'w-[2rem] min-w-[2rem]',
+  orderNumber: 'w-[9rem] min-w-[9rem]',
+  channel: 'w-[5.5rem] min-w-[5.5rem]',
+  customerName: 'w-[12rem] min-w-[12rem]',
+  shippingStatus: 'w-[9rem] min-w-[9rem]',
+  fulfillmentStatus: 'w-[5rem] min-w-[5rem]',
+  shippingMethod: 'w-[6rem] min-w-[6rem]',
+  itemCount: 'w-[3.5rem] min-w-[3.5rem]',
+  totalAmountCents: 'w-[5.5rem] min-w-[5.5rem]',
+  createdAt: 'w-[7rem] min-w-[7rem]',
+  actions: 'w-[5.5rem] min-w-[5.5rem]',
 }
 
 function humanize(value: string) {
@@ -197,10 +226,10 @@ function canRepurchaseShipment(shipment?: OrderRow['latestShipment']) {
 function formatRateLabel(rate: PurchaseQuote['rate']) {
   const deliveryDays =
     typeof rate.deliveryDays === 'number'
-      ? `, ${rate.deliveryDays} day${rate.deliveryDays === 1 ? '' : 's'}`
+      ? `, ${rate.deliveryDays}d`
       : ''
 
-  return `${rate.carrier} ${rate.service} • ${currencyFormatter.format(rate.rateCents / 100)}${deliveryDays}`
+  return `${rate.carrier} ${rate.service} · ${currencyFormatter.format(rate.rateCents / 100)}${deliveryDays}`
 }
 
 function formatRefundStatus(refundStatus?: string) {
@@ -210,20 +239,27 @@ function formatRefundStatus(refundStatus?: string) {
 
 function SortIcon({ direction }: { direction: false | 'asc' | 'desc' }) {
   if (direction === 'asc')
-    return <ArrowUp className="size-3.5" aria-hidden="true" />
+    return <ArrowUp className="size-3" aria-hidden="true" />
   if (direction === 'desc')
-    return <ArrowDown className="size-3.5" aria-hidden="true" />
-  return <ArrowUpDown className="size-3.5 opacity-45" aria-hidden="true" />
+    return <ArrowDown className="size-3" aria-hidden="true" />
+  return <ArrowUpDown className="size-3 opacity-30" aria-hidden="true" />
 }
 
 function LoadingTable() {
   return (
-    <div className="rounded-xl border bg-card shadow-sm">
-      <div className="h-12 border-b bg-muted/20" />
-      <div className="space-y-3 p-4">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="h-10 animate-pulse rounded-md bg-muted/50" />
+    <div className="space-y-3">
+      <div className="grid grid-cols-4 gap-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="h-14 animate-pulse rounded border bg-muted/20" />
         ))}
+      </div>
+      <div className="rounded border bg-card">
+        <div className="h-8 border-b bg-muted/10" />
+        <div className="space-y-px">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-8 animate-pulse bg-muted/5" />
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -241,24 +277,93 @@ function Modal({
   children: import('react').ReactNode
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-2xl rounded-2xl border bg-card shadow-2xl">
-        <header className="flex items-start justify-between gap-4 border-b px-5 py-4">
-          <div className="space-y-1">
-            <h3 className="text-base font-semibold text-foreground">{title}</h3>
-            <p className="text-sm text-muted-foreground">{description}</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-2xl rounded-lg border bg-card shadow-2xl">
+        <header className="flex items-start justify-between gap-3 border-b px-4 py-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
           </div>
           <button
             type="button"
-            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             onClick={onClose}
             aria-label="Close dialog"
           >
-            <X className="size-4" />
+            <X className="size-3.5" />
           </button>
         </header>
-        <div className="max-h-[80vh] overflow-y-auto px-5 py-4">{children}</div>
+        <div className="max-h-[80vh] overflow-y-auto px-4 py-3">{children}</div>
       </div>
+    </div>
+  )
+}
+
+// -- Stats Bar --
+function StatsBar({ orders }: { orders: OrderRow[] }) {
+  const stats = useMemo(() => {
+    const totalRevenue = orders.reduce((sum, o) => sum + o.totalAmountCents, 0)
+    const totalItems = orders.reduce((sum, o) => sum + o.itemCount, 0)
+    const pendingShipments = orders.filter(
+      (o) => o.shippingStatus === 'pending' || o.shippingStatus === 'processing',
+    ).length
+    const delivered = orders.filter((o) => o.shippingStatus === 'delivered').length
+    const avgOrderValue = orders.length > 0 ? totalRevenue / orders.length : 0
+
+    return { totalRevenue, totalItems, pendingShipments, delivered, avgOrderValue }
+  }, [orders])
+
+  const cells = [
+    {
+      label: 'Total Orders',
+      value: orders.length.toLocaleString(),
+      icon: ShoppingCart,
+    },
+    {
+      label: 'Revenue',
+      value: currencyFormatter.format(stats.totalRevenue / 100),
+      icon: DollarSign,
+    },
+    {
+      label: 'Pending Shipments',
+      value: stats.pendingShipments.toLocaleString(),
+      icon: Truck,
+    },
+    {
+      label: 'Delivered',
+      value: stats.delivered.toLocaleString(),
+      icon: Package,
+    },
+    {
+      label: 'Total Items',
+      value: stats.totalItems.toLocaleString(),
+      icon: Tag,
+    },
+    {
+      label: 'Avg Order',
+      value: currencyFormatter.format(stats.avgOrderValue / 100),
+      icon: DollarSign,
+    },
+  ]
+
+  return (
+    <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+      {cells.map((cell) => (
+        <div
+          key={cell.label}
+          className="rounded border bg-card px-3 py-2"
+        >
+          <div className="flex items-center gap-1.5">
+            <cell.icon className="size-3 text-muted-foreground" />
+            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              {cell.label}
+            </span>
+          </div>
+          <p className="mt-1 text-sm font-semibold tabular-nums text-foreground">
+            {cell.value}
+          </p>
+        </div>
+      ))}
     </div>
   )
 }
@@ -268,13 +373,33 @@ export function OrdersTable() {
   const previewPurchase = useAction(api.shipments.actions.previewPurchase)
   const purchaseLabel = useAction(api.shipments.actions.purchaseLabel)
   const refundLabel = useAction(api.shipments.actions.refundLabel)
-  const rows = orders ?? []
+  const setFulfillmentStatus = useMutation(api.orders.mutations.setFulfillmentStatus)
+  const [activeFilter, setActiveFilter] = useState<PresetFilter>('all')
+  const [isFulfilling, setIsFulfilling] = useState(false)
+
+  const allRows = orders ?? []
+  const rows = useMemo(() => {
+    const now = Date.now()
+    switch (activeFilter) {
+      case 'last7':
+        return allRows.filter((o) => now - o.createdAt < 7 * 24 * 60 * 60 * 1000)
+      case 'last30':
+        return allRows.filter((o) => now - o.createdAt < 30 * 24 * 60 * 60 * 1000)
+      case 'unfulfilled':
+        return allRows.filter((o) => o.fulfillmentStatus !== true)
+      case 'not_delivered':
+        return allRows.filter((o) => o.shippingStatus !== 'delivered')
+      default:
+        return allRows
+    }
+  }, [allRows, activeFilter])
+
   const [sorting, setSorting] = useState<SortingState>([
     { id: 'createdAt', desc: true },
   ])
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
-    pageSize: 10,
+    pageSize: 20,
   })
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null)
   const [purchaseOrder, setPurchaseOrder] = useState<OrderRow | null>(null)
@@ -287,6 +412,7 @@ export function OrdersTable() {
   const [managedShipment, setManagedShipment] = useState<OrderRow['latestShipment']>()
   const [refundError, setRefundError] = useState<string | null>(null)
   const [isRefunding, setIsRefunding] = useState(false)
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
 
   async function openPurchaseModal(order: OrderRow) {
     setFlashMessage(null)
@@ -406,18 +532,63 @@ export function OrdersTable() {
     await openPurchaseModal(managedOrder)
   }
 
+  const selectedCount = Object.keys(rowSelection).length
+
+  async function handleMarkFulfilled() {
+    if (selectedCount === 0) return
+    setIsFulfilling(true)
+    try {
+      await Promise.all(
+        Object.keys(rowSelection).map((orderId) =>
+          setFulfillmentStatus({ orderId: orderId as any, fulfilled: true }),
+        ),
+      )
+      setFlashMessage({
+        kind: 'success',
+        text: `Marked ${selectedCount} order${selectedCount === 1 ? '' : 's'} as fulfilled.`,
+      })
+      setRowSelection({})
+    } catch (error) {
+      setFlashMessage({ kind: 'error', text: getErrorMessage(error) })
+    } finally {
+      setIsFulfilling(false)
+    }
+  }
+
   const columns = [
+    columnHelper.display({
+      id: 'select',
+      header: ({ table: t }) => (
+        <input
+          type="checkbox"
+          className="size-3 accent-primary"
+          checked={t.getIsAllPageRowsSelected()}
+          ref={(el) => {
+            if (el) el.indeterminate = t.getIsSomePageRowsSelected()
+          }}
+          onChange={t.getToggleAllPageRowsSelectedHandler()}
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          className="size-3 accent-primary"
+          checked={row.getIsSelected()}
+          onChange={row.getToggleSelectedHandler()}
+        />
+      ),
+    }),
     columnHelper.accessor('orderNumber', {
       header: 'Order',
       cell: (info) => {
         const value = info.getValue()
-        const short = value.length > 12 ? `${value.slice(0, 12)}...` : value
+        const short = value.length > 12 ? value.slice(-12) : value
         const orderUrl = getOrderUrl(info.row.original)
 
         if (!orderUrl) {
           return (
             <span
-              className="font-mono text-xs font-semibold tracking-wide"
+              className="font-mono text-[11px] font-medium tracking-wide"
               title={value}
             >
               {short}
@@ -430,7 +601,7 @@ export function OrdersTable() {
             href={orderUrl}
             target="_blank"
             rel="noreferrer noopener"
-            className="font-mono text-xs font-semibold tracking-wide text-primary underline-offset-2 hover:underline"
+            className="font-mono text-[11px] font-medium tracking-wide text-primary underline-offset-2 hover:underline"
             title={`${value} (open in ${humanize(info.row.original.channel)})`}
           >
             {short}
@@ -440,37 +611,59 @@ export function OrdersTable() {
     }),
     columnHelper.accessor('channel', {
       header: 'Channel',
-      cell: (info) => (
-        <span className="inline-flex rounded-md bg-muted px-2 py-1 text-xs font-medium capitalize text-muted-foreground">
-          {humanize(info.getValue())}
-        </span>
-      ),
+      cell: (info) => {
+        const channel = info.getValue()
+        return (
+          <span className={cn(
+            'inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+            channelStyles[channel] ?? 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400',
+          )}>
+            {humanize(channel)}
+          </span>
+        )
+      },
     }),
     columnHelper.accessor('customerName', {
       header: 'Customer',
       cell: (info) => {
         const value = info.getValue()
         const isDefaulted = normalizeStatusToken(value) === 'unknown'
+        const addr = info.row.original.shippingAddress
         return (
-          <span
-            className={cn(
-              'block max-w-52 truncate font-medium',
-              isDefaulted && 'text-amber-700 dark:text-amber-300',
-            )}
-            title={value}
-          >
-            {value}
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={cn(
+                  'block max-w-44 cursor-default truncate text-xs font-medium',
+                  isDefaulted && 'text-amber-500/80',
+                )}
+              >
+                {value}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="start" className="max-w-64">
+              <p className="font-semibold">{addr.name}</p>
+              <p className="mt-1 text-muted-foreground">
+                {addr.line1}
+                {addr.line2 ? `, ${addr.line2}` : ''}
+                {addr.line3 ? `, ${addr.line3}` : ''}
+                <br />
+                {addr.city}, {addr.state} {addr.postalCode}
+                <br />
+                {addr.country}
+              </p>
+            </TooltipContent>
+          </Tooltip>
         )
       },
     }),
     columnHelper.accessor('shippingStatus', {
-      header: 'Shipping Status',
+      header: 'Status',
       cell: (info) => {
         const shippingStatus = info.getValue()
         const trackingPublicUrl = info.row.original.trackingPublicUrl
         const className = cn(
-          'inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold',
+          'inline-flex w-fit rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
           statusStyles[shippingStatus],
         )
 
@@ -500,11 +693,11 @@ export function OrdersTable() {
     }),
     columnHelper.accessor((row) => row.fulfillmentStatus === true, {
       id: 'fulfillmentStatus',
-      header: 'Fulfilled',
+      header: 'Fulfil',
       cell: (info) => (
         <span
           className={cn(
-            'inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold',
+            'inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
             info.getValue()
               ? fulfillmentStyles.fulfilled
               : fulfillmentStyles.unfulfilled,
@@ -515,17 +708,23 @@ export function OrdersTable() {
       ),
     }),
     columnHelper.accessor('shippingMethod', {
-      header: 'Shipping Method',
-      cell: (info) => <span>{formatShippingMethodLabel(info.getValue())}</span>,
+      header: 'Method',
+      cell: (info) => (
+        <span className="text-xs text-muted-foreground">
+          {formatShippingMethodLabel(info.getValue())}
+        </span>
+      ),
     }),
     columnHelper.accessor('itemCount', {
-      header: 'Items',
-      cell: (info) => <span className="tabular-nums">{info.getValue()}</span>,
+      header: 'Qty',
+      cell: (info) => (
+        <span className="text-xs tabular-nums">{info.getValue()}</span>
+      ),
     }),
     columnHelper.accessor('totalAmountCents', {
       header: 'Total',
       cell: (info) => (
-        <span className="font-semibold tabular-nums">
+        <span className="text-xs font-medium tabular-nums">
           {currencyFormatter.format(info.getValue() / 100)}
         </span>
       ),
@@ -534,7 +733,7 @@ export function OrdersTable() {
       header: 'Created',
       cell: (info) => (
         <span
-          className="tabular-nums"
+          className="text-xs tabular-nums text-muted-foreground"
           title={new Date(info.getValue()).toLocaleString()}
         >
           {dateFormatter.format(new Date(info.getValue()))}
@@ -543,25 +742,46 @@ export function OrdersTable() {
     }),
     columnHelper.display({
       id: 'actions',
-      header: 'Actions',
+      header: '',
       cell: (info) => {
         const order = info.row.original
         const activePurchasedShipment = hasActivePurchasedShipment(order)
 
+        if (activePurchasedShipment) {
+          return (
+            <div className="flex justify-end gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    onClick={() => openManageModal(order)}
+                  >
+                    <Truck className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Manage Label</TooltipContent>
+              </Tooltip>
+            </div>
+          )
+        }
+
         return (
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              size="sm"
-              variant={activePurchasedShipment ? 'outline' : 'default'}
-              onClick={() =>
-                activePurchasedShipment
-                  ? openManageModal(order)
-                  : void openPurchaseModal(order)
-              }
-            >
-              {activePurchasedShipment ? 'Manage Label' : 'Purchase'}
-            </Button>
+          <div className="flex justify-end gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  onClick={() => void openPurchaseModal(order)}
+                >
+                  <Tag className="size-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Purchase Label</TooltipContent>
+            </Tooltip>
           </div>
         )
       },
@@ -571,23 +791,26 @@ export function OrdersTable() {
   const table = useReactTable({
     data: rows,
     columns,
+    getRowId: (row) => row._id,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    enableRowSelection: true,
     getSortedRowModel: getSortedRowModel(),
     onPaginationChange: setPagination,
     onSortingChange: setSorting,
-    state: { sorting, pagination },
+    onRowSelectionChange: setRowSelection,
+    state: { sorting, pagination, rowSelection },
   })
 
   if (!orders) {
     return <LoadingTable />
   }
 
-  if (orders.length === 0) {
+  if (allRows.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed bg-card px-6 py-16 text-center shadow-sm">
-        <p className="text-sm font-medium text-foreground">No orders found</p>
-        <p className="mt-1 text-sm text-muted-foreground">
+      <div className="rounded border border-dashed bg-card px-6 py-12 text-center">
+        <p className="text-xs font-medium text-foreground">No orders found</p>
+        <p className="mt-1 text-xs text-muted-foreground">
           Orders will appear here as soon as they are synced.
         </p>
       </div>
@@ -598,42 +821,97 @@ export function OrdersTable() {
 
   return (
     <>
-      <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
-        <header className="space-y-3 border-b bg-muted/20 px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold tracking-wide text-foreground">
+      {/* Stats bar */}
+      <StatsBar orders={rows} />
+
+      {/* Flash message */}
+      {flashMessage ? (
+        <div
+          className={cn(
+            'mt-2 rounded border px-3 py-1.5 text-xs',
+            flashMessage.kind === 'success'
+              ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
+              : 'border-red-500/20 bg-red-500/5 text-red-400',
+          )}
+        >
+          {flashMessage.text}
+        </div>
+      ) : null}
+
+      {/* Orders table */}
+      <section className="mt-2 overflow-hidden rounded border bg-card">
+        <div className="flex items-center justify-between border-b bg-muted/5 px-3 py-1.5">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-foreground">
               Orders
             </h2>
-            <p className="text-xs text-muted-foreground">
-              {orders.length} {orders.length === 1 ? 'order' : 'orders'} loaded
-            </p>
+            <span className="text-[10px] tabular-nums text-muted-foreground">
+              {rows.length}{activeFilter !== 'all' ? ` / ${allRows.length}` : ''} total
+            </span>
+            {selectedCount > 0 ? (
+              <span className="text-[10px] tabular-nums text-primary">
+                · {selectedCount} selected
+              </span>
+            ) : null}
           </div>
-          {flashMessage ? (
-            <div
-              className={cn(
-                'rounded-lg border px-3 py-2 text-sm',
-                flashMessage.kind === 'success'
-                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                  : 'border-red-500/30 bg-red-500/10 text-red-200',
-              )}
-            >
-              {flashMessage.text}
-            </div>
-          ) : null}
-        </header>
+          <div className="flex items-center gap-1">
+            {([
+              ['all', 'All'],
+              ['last7', '7d'],
+              ['last30', '30d'],
+              ['unfulfilled', 'Unfulfilled'],
+              ['not_delivered', 'Not Delivered'],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={cn(
+                  'rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+                  activeFilter === key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                )}
+                onClick={() => {
+                  setActiveFilter(key)
+                  setPagination((p) => ({ ...p, pageIndex: 0 }))
+                }}
+              >
+                {label}
+              </button>
+            ))}
+            {selectedCount > 0 ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    className="ml-1 gap-1 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                    onClick={() => void handleMarkFulfilled()}
+                    disabled={isFulfilling}
+                  >
+                    <CheckCircle2 className="size-3" />
+                    {isFulfilling ? 'Updating...' : 'Mark Fulfilled'}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Mark {selectedCount} order{selectedCount === 1 ? '' : 's'} as fulfilled</TooltipContent>
+              </Tooltip>
+            ) : null}
+          </div>
+        </div>
 
         <div className="overflow-x-auto">
-          <Table className="min-w-[1120px]">
-            <TableHeader className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+          <Table className="min-w-[1020px]">
+            <TableHeader className="sticky top-0 z-10 bg-card">
               {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id} className="border-border/70">
+                <TableRow key={headerGroup.id} className="border-border/50 hover:bg-transparent">
                   {headerGroup.headers.map((header) => {
                     const isNumeric = numericColumns.has(header.column.id)
                     return (
                       <TableHead
                         key={header.id}
                         className={cn(
-                          'h-11 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground',
+                          'h-7 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
                           getColumnWidthClass(header.column.id),
                           isNumeric && 'text-right',
                         )}
@@ -642,7 +920,7 @@ export function OrdersTable() {
                           <button
                             type="button"
                             className={cn(
-                              'flex w-full items-center gap-1.5 rounded-md px-1 py-1 transition-colors hover:bg-muted/70',
+                              'flex w-full items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-muted/50',
                               isNumeric && 'justify-end',
                             )}
                             onClick={header.column.getToggleSortingHandler()}
@@ -668,9 +946,9 @@ export function OrdersTable() {
                 <TableRow
                   key={row.id}
                   className={cn(
-                    'border-border/70',
-                    rowIndex % 2 === 0 ? 'bg-background' : 'bg-muted/15',
-                    'hover:bg-muted/40',
+                    'border-border/30',
+                    rowIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
+                    'hover:bg-muted/20',
                   )}
                 >
                   {row.getVisibleCells().map((cell) => {
@@ -679,7 +957,7 @@ export function OrdersTable() {
                       <TableCell
                         key={cell.id}
                         className={cn(
-                          'px-3 py-3',
+                          'px-2 py-1.5',
                           getColumnWidthClass(cell.column.id),
                           isNumeric && 'text-right tabular-nums',
                         )}
@@ -694,17 +972,17 @@ export function OrdersTable() {
           </Table>
         </div>
 
-        <footer className="flex flex-col gap-3 border-t bg-muted/10 px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <footer className="flex items-center justify-between border-t bg-muted/5 px-3 py-1.5 text-[10px] text-muted-foreground">
           <div className="flex items-center gap-2">
             <label
               htmlFor="orders-page-size"
               className="font-medium text-foreground"
             >
-              Rows per page
+              Rows
             </label>
             <select
               id="orders-page-size"
-              className="h-8 rounded-md border bg-background px-2 text-xs text-foreground"
+              className="h-6 rounded border bg-background px-1.5 text-[10px] text-foreground"
               value={table.getState().pagination.pageSize}
               onChange={(event) => {
                 table.setPageSize(Number(event.target.value))
@@ -719,7 +997,7 @@ export function OrdersTable() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span>
+            <span className="tabular-nums">
               {table.getState().pagination.pageIndex *
                 table.getState().pagination.pageSize +
                 1}
@@ -729,25 +1007,24 @@ export function OrdersTable() {
                   table.getState().pagination.pageSize,
                 orders.length,
               )}{' '}
-              of {orders.length}
+              of {rows.length}
             </span>
-            <span>
-              Page {table.getState().pagination.pageIndex + 1} of{' '}
-              {table.getPageCount()}
+            <span className="tabular-nums">
+              Pg {table.getState().pagination.pageIndex + 1}/{table.getPageCount()}
             </span>
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="xs"
               onClick={() => table.previousPage()}
               disabled={!table.getCanPreviousPage()}
             >
-              Previous
+              Prev
             </Button>
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="xs"
               onClick={() => table.nextPage()}
               disabled={!table.getCanNextPage()}
             >
@@ -757,61 +1034,62 @@ export function OrdersTable() {
         </footer>
       </section>
 
+      {/* Purchase Modal */}
       {purchaseOrder ? (
         <Modal
           title={`Purchase Shipping: ${purchaseOrder.orderNumber}`}
           description="Rates are quoted live from EasyPost. Purchase is blocked if the quoted service or price changes before buy."
           onClose={closePurchaseModal}
         >
-          <div className="space-y-4">
+          <div className="space-y-3">
             {isPreviewing ? (
-              <div className="space-y-3">
-                <div className="h-12 animate-pulse rounded-lg bg-muted/50" />
-                <div className="h-24 animate-pulse rounded-lg bg-muted/40" />
-                <div className="h-32 animate-pulse rounded-lg bg-muted/30" />
+              <div className="space-y-2">
+                <div className="h-10 animate-pulse rounded bg-muted/30" />
+                <div className="h-20 animate-pulse rounded bg-muted/20" />
+                <div className="h-24 animate-pulse rounded bg-muted/15" />
               </div>
             ) : purchaseQuote ? (
               <>
-                <div className="grid gap-3 rounded-xl border bg-muted/10 p-4 md:grid-cols-4">
+                <div className="grid gap-2 rounded border bg-muted/5 p-3 md:grid-cols-4">
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                       Method
                     </p>
-                    <p className="mt-1 font-medium">
+                    <p className="mt-0.5 text-xs font-medium">
                       {purchaseQuote.shippingMethod}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                       Package
                     </p>
-                    <p className="mt-1 font-medium">
+                    <p className="mt-0.5 text-xs font-medium">
                       {purchaseQuote.predefinedPackage}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                       Weight
                     </p>
-                    <p className="mt-1 font-medium">
+                    <p className="mt-0.5 text-xs font-medium">
                       {purchaseQuote.weightOz} oz
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                       Quantity
                     </p>
-                    <p className="mt-1 font-medium">
+                    <p className="mt-0.5 text-xs font-medium">
                       {purchaseQuote.quantity} cards
                     </p>
                   </div>
                 </div>
 
-                <div className="rounded-xl border bg-muted/10 p-4">
-                  <p className="text-sm font-semibold text-foreground">
+                <div className="rounded border bg-muted/5 p-3">
+                  <p className="text-xs font-semibold text-foreground">
                     Verified destination
                   </p>
-                  <p className="mt-2 text-sm text-muted-foreground">
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
                     {purchaseQuote.verifiedAddress.street1}
                     {purchaseQuote.verifiedAddress.street2
                       ? `, ${purchaseQuote.verifiedAddress.street2}`
@@ -826,14 +1104,14 @@ export function OrdersTable() {
                 </div>
 
                 {!purchaseQuote.addressVerified ? (
-                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+                  <div className="rounded border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-400">
                     <p className="font-semibold">Address verification warning</p>
-                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                    <ul className="mt-1.5 list-disc space-y-0.5 pl-4">
                       {purchaseQuote.verificationErrors.map((error) => (
                         <li key={error}>{error}</li>
                       ))}
                     </ul>
-                    <label className="mt-3 flex items-start gap-2">
+                    <label className="mt-2 flex items-start gap-2">
                       <input
                         type="checkbox"
                         className="mt-0.5"
@@ -850,16 +1128,16 @@ export function OrdersTable() {
                   </div>
                 ) : null}
 
-                <div className="rounded-xl border bg-muted/10 p-4">
-                  <p className="text-sm font-semibold text-foreground">
+                <div className="rounded border bg-muted/5 p-3">
+                  <p className="text-xs font-semibold text-foreground">
                     Selected service
                   </p>
-                  <div className="mt-3 rounded-lg border border-primary bg-primary/10 px-3 py-3">
-                    <p className="font-medium text-foreground">
+                  <div className="mt-2 rounded border border-primary/30 bg-primary/5 px-3 py-2">
+                    <p className="text-xs font-medium text-foreground">
                       {formatRateLabel(purchaseQuote.rate)}
                     </p>
-                    <p className="text-xs text-muted-foreground">
-                      Derived automatically from shipping method:
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">
+                      Derived from shipping method:
                       {' '}
                       {purchaseQuote.shippingMethod} {'->'} {purchaseQuote.service}
                     </p>
@@ -869,15 +1147,16 @@ export function OrdersTable() {
             ) : null}
 
             {purchaseError ? (
-              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+              <div className="rounded border border-red-500/20 bg-red-500/5 px-3 py-1.5 text-xs text-red-400">
                 {purchaseError}
               </div>
             ) : null}
 
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-2 pt-1">
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 onClick={closePurchaseModal}
                 disabled={isPurchasing}
               >
@@ -885,6 +1164,7 @@ export function OrdersTable() {
               </Button>
               <Button
                 type="button"
+                size="sm"
                 onClick={() => void handlePurchaseSubmit()}
                 disabled={
                   isPreviewing ||
@@ -900,90 +1180,101 @@ export function OrdersTable() {
         </Modal>
       ) : null}
 
+      {/* Manage Label Modal */}
       {managedOrder && managedShipment ? (
         <Modal
           title={`Manage Label: ${managedOrder.orderNumber}`}
           description="Reprint the current label, request a refund, or start a replacement purchase after the refund is accepted."
           onClose={closeManageModal}
         >
-          <div className="space-y-4">
-            <div className="grid gap-3 rounded-xl border bg-muted/10 p-4 md:grid-cols-2">
+          <div className="space-y-3">
+            <div className="grid gap-2 rounded border bg-muted/5 p-3 md:grid-cols-2">
               <div>
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                   Tracking
                 </p>
-                <p className="mt-1 font-medium">
+                <p className="mt-0.5 text-xs font-medium">
                   {managedShipment.trackingNumber ?? 'Not available'}
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                   Refund
                 </p>
-                <p className="mt-1 font-medium capitalize">
+                <p className="mt-0.5 text-xs font-medium capitalize">
                   {formatRefundStatus(managedShipment.refundStatus)}
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                   Carrier
                 </p>
-                <p className="mt-1 font-medium">
+                <p className="mt-0.5 text-xs font-medium">
                   {managedShipment.carrier ?? 'Unknown'}
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                   Service
                 </p>
-                <p className="mt-1 font-medium">
+                <p className="mt-0.5 text-xs font-medium">
                   {managedShipment.service ?? 'Unknown'}
                 </p>
               </div>
             </div>
 
             {refundError ? (
-              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+              <div className="rounded border border-red-500/20 bg-red-500/5 px-3 py-1.5 text-xs text-red-400">
                 {refundError}
               </div>
             ) : null}
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               {managedShipment.labelUrl ? (
-                <Button type="button" variant="outline" asChild>
-                  <a
-                    href={managedShipment.labelUrl}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                  >
-                    Reprint Label
-                    <ExternalLink className="size-3.5" />
-                  </a>
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button type="button" variant="outline" size="sm" asChild>
+                      <a
+                        href={managedShipment.labelUrl}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        <Printer className="size-3" />
+                        Reprint Label
+                        <ExternalLink className="size-3" />
+                      </a>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Open label in new tab</TooltipContent>
+                </Tooltip>
               ) : null}
 
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 onClick={() => void handleRefund()}
                 disabled={
                   isRefunding || hasRefundedPostage(managedShipment.refundStatus)
                 }
               >
+                <Undo2 className="size-3" />
                 {isRefunding ? 'Refunding...' : 'Refund Label'}
               </Button>
 
               <Button
                 type="button"
+                size="sm"
                 onClick={() => void handleRepurchaseFromManage()}
                 disabled={!canRepurchaseManaged}
               >
+                <RefreshCw className="size-3" />
                 Repurchase Label
               </Button>
             </div>
 
             {!canRepurchaseManaged ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-[10px] text-muted-foreground">
                 Repurchase stays locked until the existing label refund is
                 submitted or completed.
               </p>
