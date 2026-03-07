@@ -1,16 +1,13 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
-import { deriveOrderShippingMethod } from '../../shared/shippingMethod'
-import {
-  deriveOrderShippingStatus,
-  hasRefundedPostage,
-  normalizeShippingStatus,
-  pickLatestShipment,
-} from '../utils/shippingStatus'
+import { normalizeShippingStatus } from '../utils/shippingStatus'
 import { query } from '../_generated/server'
+import {
+  buildOrderShipmentState,
+  hasMaterializedOrderShipmentState,
+  readMaterializedOrderShipmentState,
+} from './shipmentSummary'
 import type { Doc } from '../_generated/dataModel'
-import type { ShippingStatus } from '../../shared/shippingStatus'
-import type { ShippingMethod } from '../../shared/shippingMethod'
 
 const orderListFilterValidator = v.union(
   v.literal('all'),
@@ -27,23 +24,6 @@ type OrderListFilter =
   | 'unfulfilled'
   | 'not_delivered'
 
-type ShipmentSummary = Pick<
-  Doc<'shipments'>,
-  | '_id'
-  | 'easypostShipmentId'
-  | 'status'
-  | 'trackingNumber'
-  | 'labelUrl'
-  | 'refundStatus'
-  | 'trackingStatus'
-  | 'carrier'
-  | 'service'
-  | 'rateCents'
-  | 'createdAt'
-  | 'updatedAt'
-  | 'trackerPublicUrl'
->
-
 type OrderListSource = Pick<
   Doc<'orders'>,
   | '_id'
@@ -58,17 +38,13 @@ type OrderListSource = Pick<
   | 'itemCount'
   | 'createdAt'
   | 'updatedAt'
+  | 'trackingPublicUrl'
+  | 'shipmentCount'
+  | 'reviewShipmentCount'
+  | 'activeShipment'
+  | 'latestShipment'
 >
-
-export type OrderListRow = OrderListSource & {
-  shippingStatus: ShippingStatus
-  shippingMethod: ShippingMethod
-  trackingPublicUrl?: string
-  shipmentCount: number
-  reviewShipmentCount: number
-  activeShipment?: ShipmentSummary
-  latestShipment?: ShipmentSummary
-}
+export type OrderListRow = ReturnType<typeof buildOrderListRow>
 
 function cutoffForFilter(
   filter: OrderListFilter,
@@ -105,69 +81,7 @@ function matchesOrderFilter(
   }
 }
 
-function shipmentHasPurchasedLabel(
-  shipment: Pick<
-    Doc<'shipments'>,
-    'trackingNumber' | 'labelUrl' | 'easypostTrackerId'
-  >,
-) {
-  return Boolean(
-    shipment.trackingNumber || shipment.labelUrl || shipment.easypostTrackerId,
-  )
-}
-
-function selectActiveShipment(
-  shipments: Array<Doc<'shipments'>>,
-): Doc<'shipments'> | undefined {
-  const purchased = shipments.filter(
-    (shipment) =>
-      shipmentHasPurchasedLabel(shipment) &&
-      !hasRefundedPostage(shipment.refundStatus),
-  )
-  if (purchased.length > 0) {
-    return pickLatestShipment(purchased) ?? undefined
-  }
-
-  return pickLatestShipment(shipments) ?? undefined
-}
-
-function mapShipmentSummary(shipment: Doc<'shipments'>): ShipmentSummary {
-  return {
-    _id: shipment._id,
-    easypostShipmentId: shipment.easypostShipmentId,
-    status: shipment.status,
-    ...(shipment.trackingNumber ? { trackingNumber: shipment.trackingNumber } : {}),
-    ...(shipment.labelUrl ? { labelUrl: shipment.labelUrl } : {}),
-    ...(shipment.refundStatus ? { refundStatus: shipment.refundStatus } : {}),
-    ...(shipment.trackingStatus ? { trackingStatus: shipment.trackingStatus } : {}),
-    ...(shipment.carrier ? { carrier: shipment.carrier } : {}),
-    ...(shipment.service ? { service: shipment.service } : {}),
-    ...(typeof shipment.rateCents === 'number'
-      ? { rateCents: shipment.rateCents }
-      : {}),
-    ...(shipment.trackerPublicUrl
-      ? { trackerPublicUrl: shipment.trackerPublicUrl }
-      : {}),
-    createdAt: shipment.createdAt,
-    updatedAt: shipment.updatedAt,
-  }
-}
-
-function toOrderListRow(
-  order: OrderListSource,
-  orderShipments: Array<Doc<'shipments'>>,
-): OrderListRow {
-  const latestShipment = pickLatestShipment(orderShipments) ?? undefined
-  const activeShipment = selectActiveShipment(orderShipments)
-  const reviewShipmentCount = orderShipments.filter((shipment) => {
-    if (!shipmentHasPurchasedLabel(shipment)) return false
-    if (hasRefundedPostage(shipment.refundStatus)) return false
-    if (normalizeShippingStatus(shipment.trackingStatus) !== 'unknown') {
-      return false
-    }
-    return shipment._id !== activeShipment?._id
-  }).length
-
+function buildOrderListRow(order: OrderListSource, shipmentState: ReturnType<typeof buildOrderShipmentState>) {
   return {
     _id: order._id,
     externalId: order.externalId,
@@ -180,22 +94,7 @@ function toOrderListRow(
     itemCount: order.itemCount,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
-    shippingMethod: deriveOrderShippingMethod({
-      order,
-      latestShipment: activeShipment ?? latestShipment,
-    }),
-    shippingStatus: deriveOrderShippingStatus({
-      order,
-      latestShipment: activeShipment ?? latestShipment,
-    }),
-    shipmentCount: orderShipments.length,
-    reviewShipmentCount,
-    ...(typeof activeShipment?.trackerPublicUrl === 'string' &&
-    activeShipment.trackerPublicUrl.trim() !== ''
-      ? { trackingPublicUrl: activeShipment.trackerPublicUrl }
-      : {}),
-    ...(activeShipment ? { activeShipment: mapShipmentSummary(activeShipment) } : {}),
-    ...(latestShipment ? { latestShipment: mapShipmentSummary(latestShipment) } : {}),
+    ...shipmentState,
   }
 }
 
@@ -274,12 +173,19 @@ export const listPage = query({
     const page = await listOrdersByCreatedAt(ctx, filter, paginationOpts)
     const pageRows = await Promise.all(
       page.page.map(async (order: Doc<'orders'>) => {
+        if (hasMaterializedOrderShipmentState(order)) {
+          return buildOrderListRow(order, readMaterializedOrderShipmentState(order))
+        }
+
         const shipments = await ctx.db
           .query('shipments')
           .withIndex('by_orderId', (q) => q.eq('orderId', order._id))
           .collect()
 
-        return toOrderListRow(order, shipments)
+        return buildOrderListRow(order, buildOrderShipmentState({
+          order,
+          shipments,
+        }))
       }),
     )
 
