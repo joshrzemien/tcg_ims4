@@ -63,14 +63,42 @@ export const listTrackedSeries = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const allSeries = await ctx.db.query('pricingTrackedSeries').collect()
+    const allSeries = args.activeOnly && args.setKey
+      ? await ctx.db
+          .query('pricingTrackedSeries')
+          .withIndex('by_active_setKey', (q) =>
+            q.eq('active', true).eq('setKey', args.setKey!),
+          )
+          .collect()
+      : args.activeOnly
+        ? await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_active', (q) => q.eq('active', true))
+            .collect()
+        : args.setKey
+          ? await ctx.db
+              .query('pricingTrackedSeries')
+              .withIndex('by_setKey', (q) => q.eq('setKey', args.setKey!))
+              .collect()
+          : args.categoryKey
+            ? await ctx.db
+                .query('pricingTrackedSeries')
+                .withIndex('by_categoryKey', (q) => q.eq('categoryKey', args.categoryKey!))
+                .collect()
+            : await ctx.db.query('pricingTrackedSeries').collect()
     const searchValue = args.search?.trim().toLowerCase()
     const filtered = allSeries
-      .filter((series) => (args.activeOnly ? series.active : true))
+      .filter((series) =>
+        args.activeOnly && args.setKey ? true : args.activeOnly ? series.active : true,
+      )
       .filter((series) =>
         args.categoryKey ? series.categoryKey === args.categoryKey : true,
       )
-      .filter((series) => (args.setKey ? series.setKey === args.setKey : true))
+      .filter((series) =>
+        args.setKey && !(args.activeOnly && args.setKey)
+          ? series.setKey === args.setKey
+          : true,
+      )
       .filter((series) =>
         args.pricingSource ? series.pricingSource === args.pricingSource : true,
       )
@@ -155,7 +183,17 @@ export const listResolutionIssues = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const issues = await ctx.db.query('pricingResolutionIssues').collect()
+    const issues = args.activeOnly
+      ? await ctx.db
+          .query('pricingResolutionIssues')
+          .withIndex('by_active', (q) => q.eq('active', true))
+          .collect()
+      : args.setKey
+        ? await ctx.db
+            .query('pricingResolutionIssues')
+            .withIndex('by_setKey', (q) => q.eq('setKey', args.setKey!))
+            .collect()
+        : await ctx.db.query('pricingResolutionIssues').collect()
     const filtered = issues
       .filter((issue) => (args.activeOnly ? issue.active : true))
       .filter((issue) => (args.setKey ? issue.setKey === args.setKey : true))

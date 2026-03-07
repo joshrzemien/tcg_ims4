@@ -172,9 +172,13 @@ export default defineSchema({
   })
     .index('by_active', ['active'])
     .index('by_ruleType', ['ruleType'])
+    .index('by_ruleType_active', ['ruleType', 'active'])
     .index('by_categoryKey', ['categoryKey'])
+    .index('by_active_categoryKey', ['active', 'categoryKey'])
     .index('by_setKey', ['setKey'])
-    .index('by_catalogProductKey', ['catalogProductKey']),
+    .index('by_active_setKey', ['active', 'setKey'])
+    .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_active_catalogProductKey', ['active', 'catalogProductKey']),
   pricingTrackedSeries: defineTable({
     key: v.string(),
     catalogProductKey: v.string(),

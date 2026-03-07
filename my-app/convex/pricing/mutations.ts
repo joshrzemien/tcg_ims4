@@ -15,6 +15,46 @@ type TrackingRuleDoc = Doc<'pricingTrackingRules'>
 type CatalogSetDoc = Doc<'catalogSets'>
 type PricingMutationCtx = any
 
+async function loadRelevantRulesForSet(
+  ctx: PricingMutationCtx,
+  set: CatalogSetDoc,
+  products: Array<Doc<'catalogProducts'>>,
+) {
+  const productKeySet = new Set(products.map((product) => product.key))
+  const [setRules, categoryRules, manualRules] = await Promise.all([
+    ctx.db
+      .query('pricingTrackingRules')
+      .withIndex('by_active_setKey', (q: any) =>
+        q.eq('active', true).eq('setKey', set.key),
+      )
+      .collect(),
+    ctx.db
+      .query('pricingTrackingRules')
+      .withIndex('by_active_categoryKey', (q: any) =>
+        q.eq('active', true).eq('categoryKey', set.categoryKey),
+      )
+      .collect(),
+    ctx.db
+      .query('pricingTrackingRules')
+      .withIndex('by_ruleType_active', (q: any) =>
+        q.eq('ruleType', 'manual_product').eq('active', true),
+      )
+      .collect(),
+  ])
+
+  const scopedManualRules = manualRules.filter(
+    (rule: TrackingRuleDoc) =>
+      typeof rule.catalogProductKey === 'string' &&
+      productKeySet.has(rule.catalogProductKey),
+  )
+
+  return {
+    setRules,
+    categoryRules,
+    manualRules: scopedManualRules,
+  }
+}
+
 function categoryRuleAppliesToSet(
   rule: TrackingRuleDoc,
   set: CatalogSetDoc,
@@ -344,17 +384,14 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
       return { setKey, series: 0, joins: 0 }
     }
 
-    const [products, activeRules, existingJoins] = await Promise.all([
+    const [products, existingJoins] = await Promise.all([
       ctx.db.query('catalogProducts').withIndex('by_setKey', (q) => q.eq('setKey', setKey)).collect(),
-      ctx.db
-        .query('pricingTrackingRules')
-        .withIndex('by_active', (q) => q.eq('active', true))
-        .collect(),
       ctx.db
         .query('pricingTrackedSeriesRules')
         .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
         .collect(),
     ])
+    const relevantRules = await loadRelevantRulesForSet(ctx, set, products)
 
     const desiredSeries = new Map<
       string,
@@ -387,9 +424,15 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
     >()
 
     for (const product of products) {
-      const productRules = activeRules.filter((rule) =>
-        ruleAppliesToProduct(rule, set, product),
-      )
+      const productRules = [
+        ...relevantRules.setRules,
+        ...relevantRules.categoryRules.filter((rule: TrackingRuleDoc) =>
+          ruleAppliesToProduct(rule, set, product),
+        ),
+        ...relevantRules.manualRules.filter(
+          (rule: TrackingRuleDoc) => rule.catalogProductKey === product.key,
+        ),
+      ]
       if (productRules.length === 0) {
         continue
       }
