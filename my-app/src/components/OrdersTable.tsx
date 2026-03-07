@@ -3,15 +3,10 @@ import {
   createColumnHelper,
   flexRender,
   getCoreRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
 import { useAction, useQuery } from 'convex/react'
 import {
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
   CheckCircle2,
   DollarSign,
   ExternalLink,
@@ -33,7 +28,7 @@ import {
   normalizeStatusToken,
 } from '../../shared/shippingStatus'
 import { isNonRefundableEasyPostLetterShipment } from '../../shared/shippingRefund'
-import type { PaginationState, RowSelectionState, SortingState } from '@tanstack/react-table'
+import type { RowSelectionState } from '@tanstack/react-table'
 import type { ReactNode } from 'react'
 import type { Doc } from '../../convex/_generated/dataModel'
 import type { ShippingMethod } from '../../shared/shippingMethod'
@@ -54,7 +49,18 @@ import {
 } from '~/components/ui/tooltip'
 import { cn } from '~/lib/utils'
 
-type OrderRow = Omit<Doc<'orders'>, 'shippingStatus' | 'shippingMethod'> & {
+type OrderRow = {
+  _id: Doc<'orders'>['_id']
+  externalId: string
+  orderNumber: string
+  channel: string
+  customerName: string
+  fulfillmentStatus?: boolean
+  shippingAddress: Doc<'orders'>['shippingAddress']
+  totalAmountCents: number
+  itemCount: number
+  createdAt: number
+  updatedAt: number
   shippingStatus: ShippingStatus
   shippingMethod: ShippingMethod
   trackingPublicUrl?: string
@@ -90,6 +96,12 @@ type OrderRow = Omit<Doc<'orders'>, 'shippingStatus' | 'shippingMethod'> & {
     createdAt?: number
     updatedAt?: number
   }
+}
+
+type OrdersPage = {
+  page: Array<OrderRow>
+  continueCursor: string
+  isDone: boolean
 }
 
 type ManagedShipment = Doc<'shipments'>
@@ -391,14 +403,6 @@ function formatRefundStatus(refundStatus?: string) {
   return humanize(normalizeStatusToken(refundStatus))
 }
 
-function SortIcon({ direction }: { direction: false | 'asc' | 'desc' }) {
-  if (direction === 'asc')
-    return <ArrowUp className="size-3" aria-hidden="true" />
-  if (direction === 'desc')
-    return <ArrowDown className="size-3" aria-hidden="true" />
-  return <ArrowUpDown className="size-3 opacity-30" aria-hidden="true" />
-}
-
 function LoadingTable() {
   return (
     <div className="space-y-3">
@@ -469,7 +473,7 @@ function StatsBar({ orders }: { orders: Array<OrderRow> }) {
 
   const cells = [
     {
-      label: 'Total Orders',
+      label: 'Visible Orders',
       value: orders.length.toLocaleString(),
       icon: ShoppingCart,
     },
@@ -523,42 +527,27 @@ function StatsBar({ orders }: { orders: Array<OrderRow> }) {
 }
 
 export function OrdersTable() {
-  const orders = useQuery(api.orders.queries.list)
+  const [activeFilter, setActiveFilter] = useState<PresetFilter>('all')
+  const [pageSize, setPageSize] = useState(20)
+  const [pageIndex, setPageIndex] = useState(0)
+  const [pageCursors, setPageCursors] = useState<Array<string | null>>([null])
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
+  const ordersPage = useQuery(api.orders.queries.listPage, {
+    filter: activeFilter,
+    paginationOpts: {
+      cursor: pageCursors[pageIndex] ?? null,
+      numItems: pageSize,
+    },
+  }) as OrdersPage | undefined
   const exportPullSheets = useAction(api.orders.actions.exportPullSheets)
   const exportPackingSlips = useAction(api.orders.actions.exportPackingSlips)
   const previewPurchase = useAction(api.shipments.actions.previewPurchase)
   const purchaseLabel = useAction(api.shipments.actions.purchaseLabel)
   const refundLabel = useAction(api.shipments.actions.refundLabel)
   const setFulfillmentStatus = useAction(api.shipments.actions.setFulfillmentStatus)
-  const [activeFilter, setActiveFilter] = useState<PresetFilter>('all')
   const [isFulfilling, setIsFulfilling] = useState(false)
   const [isExportingPullSheets, setIsExportingPullSheets] = useState(false)
   const [isExportingPackingSlips, setIsExportingPackingSlips] = useState(false)
-
-  const allRows = orders ?? []
-  const rows = useMemo(() => {
-    const now = Date.now()
-    switch (activeFilter) {
-      case 'last7':
-        return allRows.filter((o) => now - o.createdAt < 7 * 24 * 60 * 60 * 1000)
-      case 'last30':
-        return allRows.filter((o) => now - o.createdAt < 30 * 24 * 60 * 60 * 1000)
-      case 'unfulfilled':
-        return allRows.filter((o) => o.fulfillmentStatus !== true)
-      case 'not_delivered':
-        return allRows.filter((o) => o.shippingStatus !== 'delivered')
-      default:
-        return allRows
-    }
-  }, [allRows, activeFilter])
-
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: 'createdAt', desc: true },
-  ])
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 20,
-  })
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null)
   const [purchaseOrder, setPurchaseOrder] = useState<OrderRow | null>(null)
   const [purchaseQuote, setPurchaseQuote] = useState<PurchaseQuote | null>(null)
@@ -571,9 +560,9 @@ export function OrdersTable() {
   const [refundingShipmentId, setRefundingShipmentId] = useState<
     Doc<'shipments'>['_id'] | null
   >(null)
-  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
+  const rows = ordersPage?.page ?? []
   const currentManagedOrder = managedOrder
-    ? allRows.find((order) => order._id === managedOrder._id) ?? managedOrder
+    ? rows.find((order) => order._id === managedOrder._id) ?? managedOrder
     : null
   const managedOrderShipments = useQuery(
     api.shipments.queries.getByOrderId,
@@ -591,14 +580,25 @@ export function OrdersTable() {
   )
 
   const selectedOrders = useMemo(
-    () => allRows.filter((order) => rowSelection[order._id] === true),
-    [allRows, rowSelection],
+    () => rows.filter((order) => rowSelection[order._id] === true),
+    [rows, rowSelection],
   )
   const selectedCount = selectedOrders.length
   const selectedTcgplayerCount = selectedOrders.filter(
     (order) => order.channel === 'tcgplayer',
   ).length
   const selectedNonTcgplayerCount = selectedCount - selectedTcgplayerCount
+  const visibleRangeStart = rows.length === 0 ? 0 : pageIndex * pageSize + 1
+  const visibleRangeEnd = pageIndex * pageSize + rows.length
+
+  function resetPageWindow(nextFilter?: PresetFilter) {
+    setRowSelection({})
+    setPageIndex(0)
+    setPageCursors([null])
+    if (nextFilter) {
+      setActiveFilter(nextFilter)
+    }
+  }
 
   async function openPurchaseModal(order: OrderRow) {
     setFlashMessage(null)
@@ -1006,23 +1006,19 @@ export function OrdersTable() {
     columns,
     getRowId: (row) => row._id,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     enableRowSelection: true,
-    getSortedRowModel: getSortedRowModel(),
-    onPaginationChange: setPagination,
-    onSortingChange: setSorting,
     onRowSelectionChange: setRowSelection,
-    state: { sorting, pagination, rowSelection },
+    state: { rowSelection },
   })
 
   const isAllPageRowsSelected = table.getIsAllPageRowsSelected()
   const isSomePageRowsSelected = table.getIsSomePageRowsSelected()
 
-  if (!orders) {
+  if (!ordersPage) {
     return <LoadingTable />
   }
 
-  if (allRows.length === 0) {
+  if (rows.length === 0 && pageIndex === 0) {
     return (
       <div className="rounded border border-dashed bg-card px-6 py-12 text-center">
         <p className="text-xs font-medium text-foreground">No orders found</p>
@@ -1064,7 +1060,7 @@ export function OrdersTable() {
               Orders
             </h2>
             <span className="text-[10px] tabular-nums text-muted-foreground">
-              {rows.length}{activeFilter !== 'all' ? ` / ${allRows.length}` : ''} total
+              {rows.length} shown
             </span>
             <span
               className={cn(
@@ -1110,8 +1106,7 @@ export function OrdersTable() {
                     : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
                 )}
                 onClick={() => {
-                  setActiveFilter(key)
-                  setPagination((p) => ({ ...p, pageIndex: 0 }))
+                  resetPageWindow(key)
                 }}
               >
                 {label}
@@ -1212,13 +1207,11 @@ export function OrdersTable() {
                         )}
                       >
                         {header.isPlaceholder ? null : (
-                          <button
-                            type="button"
+                          <div
                             className={cn(
-                              'flex w-full items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-muted/50',
+                              'flex w-full items-center gap-1 px-1 py-0.5',
                               isNumeric && 'justify-end',
                             )}
-                            onClick={header.column.getToggleSortingHandler()}
                           >
                             <span>
                               {flexRender(
@@ -1226,8 +1219,7 @@ export function OrdersTable() {
                                 header.getContext(),
                               )}
                             </span>
-                            <SortIcon direction={header.column.getIsSorted()} />
-                          </button>
+                          </div>
                         )}
                       </TableHead>
                     )
@@ -1289,14 +1281,17 @@ export function OrdersTable() {
             <select
               id="orders-page-size"
               className="h-6 rounded border bg-background px-1.5 text-[10px] text-foreground"
-              value={table.getState().pagination.pageSize}
+              value={pageSize}
               onChange={(event) => {
-                table.setPageSize(Number(event.target.value))
+                setPageSize(Number(event.target.value))
+                setRowSelection({})
+                setPageIndex(0)
+                setPageCursors([null])
               }}
             >
-              {[10, 20, 50].map((pageSize) => (
-                <option key={pageSize} value={pageSize}>
-                  {pageSize}
+              {[10, 20, 50].map((pageSizeOption) => (
+                <option key={pageSizeOption} value={pageSizeOption}>
+                  {pageSizeOption}
                 </option>
               ))}
             </select>
@@ -1304,26 +1299,20 @@ export function OrdersTable() {
 
           <div className="flex items-center gap-2">
             <span className="tabular-nums">
-              {table.getState().pagination.pageIndex *
-                table.getState().pagination.pageSize +
-                1}
-              -
-              {Math.min(
-                (table.getState().pagination.pageIndex + 1) *
-                  table.getState().pagination.pageSize,
-                orders.length,
-              )}{' '}
-              of {rows.length}
+              {visibleRangeStart}-{visibleRangeEnd}
             </span>
             <span className="tabular-nums">
-              Pg {table.getState().pagination.pageIndex + 1}/{table.getPageCount()}
+              Pg {pageIndex + 1}
             </span>
             <Button
               type="button"
               variant="outline"
               size="xs"
-              onClick={() => table.previousPage()}
-              disabled={!table.getCanPreviousPage()}
+              onClick={() => {
+                setRowSelection({})
+                setPageIndex((current) => Math.max(0, current - 1))
+              }}
+              disabled={pageIndex === 0}
             >
               Prev
             </Button>
@@ -1331,8 +1320,20 @@ export function OrdersTable() {
               type="button"
               variant="outline"
               size="xs"
-              onClick={() => table.nextPage()}
-              disabled={!table.getCanNextPage()}
+              onClick={() => {
+                if (ordersPage.isDone) {
+                  return
+                }
+
+                setRowSelection({})
+                setPageCursors((current) => {
+                  const next = current.slice(0, pageIndex + 1)
+                  next[pageIndex + 1] = ordersPage.continueCursor
+                  return next
+                })
+                setPageIndex((current) => current + 1)
+              }}
+              disabled={ordersPage.isDone}
             >
               Next
             </Button>

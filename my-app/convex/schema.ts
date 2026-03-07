@@ -46,6 +46,21 @@ const pricingResolutionIssueTypeValidator = v.union(
   v.literal('missing_product_price'),
   v.literal('missing_manapool_match'),
 )
+const shipmentSummaryValidator = v.object({
+  _id: v.id('shipments'),
+  easypostShipmentId: v.string(),
+  status: shippingStatusValidator,
+  trackingNumber: v.optional(v.string()),
+  labelUrl: v.optional(v.string()),
+  refundStatus: v.optional(v.string()),
+  trackingStatus: v.optional(shippingStatusValidator),
+  carrier: v.optional(v.string()),
+  service: v.optional(v.string()),
+  rateCents: v.optional(v.number()),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+  trackerPublicUrl: v.optional(v.string()),
+})
 
 // The schema is entirely optional.
 // You can delete this file (schema.ts) and the
@@ -310,7 +325,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index('by_orderId', ['orderId'])
-    .index('by_easypostShipmentId', ['easypostShipmentId']),
+    .index('by_easypostShipmentId', ['easypostShipmentId'])
+    .index('by_status_createdAt', ['status', 'createdAt']),
   orders: defineTable({
     externalId: v.string(), // Manapool UUID
     orderNumber: v.string(), // Manapool UUID (same for now, label is for shipping)
@@ -355,5 +371,12 @@ export default defineSchema({
     ),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index('by_externalId', ['externalId']),
+    trackingPublicUrl: v.optional(v.string()),
+    shipmentCount: v.optional(v.number()),
+    reviewShipmentCount: v.optional(v.number()),
+    activeShipment: v.optional(shipmentSummaryValidator),
+    latestShipment: v.optional(shipmentSummaryValidator),
+  })
+    .index('by_externalId', ['externalId'])
+    .index('by_createdAt', ['createdAt']),
 })

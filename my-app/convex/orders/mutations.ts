@@ -9,15 +9,17 @@ import {
   normalizeShippingStatus,
   pickLatestShipment,
 } from '../utils/shippingStatus'
+import {
+  buildOrderShipmentState,
+  materializedOrderShipmentStateEquals,
+} from './shipmentSummary'
 import { shouldMarkOrderFulfilled } from './mappers/shared'
 
-async function latestShipmentForOrder(ctx: { db: any }, orderId: any) {
-  const shipments = await ctx.db
+async function shipmentsForOrder(ctx: { db: any }, orderId: any) {
+  return await ctx.db
     .query('shipments')
     .withIndex('by_orderId', (q: any) => q.eq('orderId', orderId))
     .collect()
-
-  return pickLatestShipment<any>(shipments)
 }
 
 function normalizeProductId(productId: string | undefined): number | undefined {
@@ -120,19 +122,15 @@ async function upsertSingleOrder(ctx: { db: any }, order: any) {
     .unique()
 
   if (existing) {
-    const latestShipment = await latestShipmentForOrder(ctx, existing._id)
-    const shippingMethod = deriveOrderShippingMethod({
+    const orderShipments = await shipmentsForOrder(ctx, existing._id)
+    const shipmentState = buildOrderShipmentState({
       order: orderRecord,
-      latestShipment,
+      shipments: orderShipments,
     })
     const nextOrder = {
       ...orderRecord,
       items: enrichedItems,
-      shippingMethod,
-      shippingStatus: deriveOrderShippingStatus({
-        order: orderRecord,
-        latestShipment,
-      }),
+      ...shipmentState,
     }
 
     // Sync jobs should not clear fulfillment if it was already set internally.
@@ -142,14 +140,14 @@ async function upsertSingleOrder(ctx: { db: any }, order: any) {
 
     await ctx.db.patch('orders', existing._id, nextOrder)
   } else {
-    const shippingMethod = deriveOrderShippingMethod({
+    const shipmentState = buildOrderShipmentState({
       order: orderRecord,
+      shipments: [],
     })
     const nextOrder = {
       ...orderRecord,
       items: enrichedItems,
-      shippingMethod,
-      shippingStatus: deriveOrderShippingStatus({ order: orderRecord }),
+      ...shipmentState,
       fulfillmentStatus:
         typeof orderRecord.fulfillmentStatus === 'boolean'
           ? orderRecord.fulfillmentStatus
@@ -262,6 +260,45 @@ export const upsertOrdersBatch = internalMutation({
   handler: async (ctx, { orders }) => {
     for (const order of orders) {
       await upsertSingleOrder(ctx, order)
+    }
+  },
+})
+
+export const backfillShipmentSummaries = mutation({
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    limit: v.number(),
+  },
+  handler: async (ctx, { cursor, limit }) => {
+    const page = await ctx.db.query('orders').paginate({
+      cursor,
+      numItems: Math.max(1, Math.min(limit, 100)),
+    })
+    let updated = 0
+
+    for (const order of page.page) {
+      const orderShipments = await shipmentsForOrder(ctx, order._id)
+      const shipmentState = buildOrderShipmentState({
+        order,
+        shipments: orderShipments,
+      })
+
+      if (materializedOrderShipmentStateEquals(order, shipmentState)) {
+        continue
+      }
+
+      await ctx.db.patch('orders', order._id, {
+        ...shipmentState,
+        updatedAt: Date.now(),
+      })
+      updated += 1
+    }
+
+    return {
+      continueCursor: page.continueCursor,
+      isDone: page.isDone,
+      scanned: page.page.length,
+      updated,
     }
   },
 })
