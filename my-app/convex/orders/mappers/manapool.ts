@@ -1,5 +1,6 @@
 import { normalizeShippingStatus } from '../../utils/shippingStatus'
 import { deriveManapoolShippingMethod } from '../../../shared/shippingMethod'
+import { shouldMarkOrderFulfilled } from './shared'
 import type { OrderRecord } from '../types'
 
 interface ManapoolShippingAddress {
@@ -117,6 +118,9 @@ export function mapManapoolOrder(order: ManapoolOrderDetail): OrderRecord {
     customerName: order.shipping_address.name,
     status: platformStatus,
     shippingStatus: platformStatus,
+    ...(shouldMarkOrderFulfilled(platformStatus)
+      ? { fulfillmentStatus: true }
+      : {}),
     shippingMethod: deriveManapoolShippingMethod({
       shippingMethod: order.shipping_method,
       totalAmountCents: order.payment.total_cents,

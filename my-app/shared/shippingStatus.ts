@@ -33,6 +33,10 @@ const SHIPPING_STATUS_ALIASES: Record<string, ShippingStatus> = {
   ready_for_pickup: 'processing',
   ready_to_ship: 'processing',
   received: 'processing',
+  shipped_available_for_pickup: 'available_for_pickup',
+  shipped_delivered: 'delivered',
+  shipped_in_transit: 'in_transit',
+  shipped_out_for_delivery: 'out_for_delivery',
   transit: 'in_transit',
 }
 

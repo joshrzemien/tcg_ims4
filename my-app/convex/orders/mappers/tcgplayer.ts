@@ -1,6 +1,10 @@
 import { normalizeShippingStatus } from '../../utils/shippingStatus'
 import { deriveTcgplayerShippingMethod } from '../../../shared/shippingMethod'
-import { dollarsToCents, toTimestamp } from './shared'
+import {
+  dollarsToCents,
+  shouldMarkOrderFulfilled,
+  toTimestamp,
+} from './shared'
 import type { OrderRecord } from '../types'
 
 interface TcgplayerOrderTransaction {
@@ -64,6 +68,9 @@ export function mapTcgplayerOrder(order: TcgplayerOrderDetail): OrderRecord {
     customerName: order.buyerName ?? 'Unknown',
     status: platformStatus,
     shippingStatus: platformStatus,
+    ...(shouldMarkOrderFulfilled(platformStatus)
+      ? { fulfillmentStatus: true }
+      : {}),
     shippingMethod: deriveTcgplayerShippingMethod({
       shippingType: order.shippingType,
       totalAmountCents,

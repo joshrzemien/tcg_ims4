@@ -9,6 +9,7 @@ import {
   normalizeShippingStatus,
   pickLatestShipment,
 } from '../utils/shippingStatus'
+import { shouldMarkOrderFulfilled } from './mappers/shared'
 
 async function latestShipmentForOrder(ctx: { db: any }, orderId: any) {
   const shipments = await ctx.db
@@ -188,6 +189,59 @@ export const backfillShippingStatuses = mutation({
 
       await ctx.db.patch('orders', order._id, {
         shippingStatus: nextStatus,
+        updatedAt: Date.now(),
+      })
+      updated += 1
+    }
+
+    return {
+      scanned: orders.length,
+      updated,
+    }
+  },
+})
+
+export const backfillFulfillmentStatuses = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const [orders, shipments] = await Promise.all([
+      ctx.db.query('orders').collect(),
+      ctx.db.query('shipments').collect(),
+    ])
+    const latestShipmentByOrderId = new Map<any, any>()
+
+    for (const shipment of shipments) {
+      if (!shipment.orderId) continue
+      const existingShipment = latestShipmentByOrderId.get(shipment.orderId)
+      const latestShipment = pickLatestShipment(
+        existingShipment ? [existingShipment, shipment] : [shipment],
+      )
+      if (latestShipment) {
+        latestShipmentByOrderId.set(shipment.orderId, latestShipment)
+      }
+    }
+
+    let updated = 0
+
+    for (const order of orders) {
+      if (order.channel !== 'tcgplayer' && order.channel !== 'manapool') {
+        continue
+      }
+      if (order.fulfillmentStatus === true) {
+        continue
+      }
+
+      const derivedShippingStatus = deriveOrderShippingStatus({
+        order,
+        latestShipment: latestShipmentByOrderId.get(order._id),
+      })
+      if (!shouldMarkOrderFulfilled(derivedShippingStatus)) {
+        continue
+      }
+
+      await ctx.db.patch('orders', order._id, {
+        fulfillmentStatus: true,
+        shippingStatus: normalizeShippingStatus(derivedShippingStatus),
         updatedAt: Date.now(),
       })
       updated += 1
