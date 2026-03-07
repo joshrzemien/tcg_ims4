@@ -217,5 +217,7 @@ export default defineSchema({
     ),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index('by_externalId', ['externalId']),
+  })
+    .index('by_externalId', ['externalId'])
+    .index('by_createdAt', ['createdAt']),
 })
