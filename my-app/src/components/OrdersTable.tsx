@@ -578,7 +578,7 @@ export function OrdersTable() {
   const managedOrderShipments = useQuery(
     api.shipments.queries.getByOrderId,
     currentManagedOrder ? { orderId: currentManagedOrder._id } : 'skip',
-  ) as Array<ManagedShipment> | undefined
+  )
   const sortedManagedShipments = useMemo(
     () =>
       [...(managedOrderShipments ?? [])].sort((left, right) => {

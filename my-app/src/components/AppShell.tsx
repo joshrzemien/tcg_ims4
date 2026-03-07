@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { Package, Stamp } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '~/lib/utils'
@@ -36,9 +37,9 @@ export function AppShell({
           </div>
           <nav className="ml-auto flex items-center gap-2">
             {navItems.map((item) => (
-              <a
+              <Link
                 key={item.key}
-                href={item.href}
+                to={item.href}
                 aria-current={item.key === activeNav ? 'page' : undefined}
                 className={cn(
                   'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors',
@@ -53,7 +54,7 @@ export function AppShell({
                   <Package className="size-3.5" />
                 )}
                 {item.label}
-              </a>
+              </Link>
             ))}
           </nav>
         </div>
