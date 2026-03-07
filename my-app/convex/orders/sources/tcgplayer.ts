@@ -21,6 +21,24 @@ interface TcgplayerOrderSummary {
   orderNumber: string;
 }
 
+interface TcgplayerPullSheetRequest {
+  sortingType: "ByRelease";
+  format: "Default";
+  timezoneOffset: number;
+  orderNumbers: Array<string>;
+}
+
+interface TcgplayerPackingSlipRequest {
+  timezoneOffset: number;
+  orderNumbers: Array<string>;
+}
+
+export interface TcgplayerExportedDocument {
+  base64Data: string;
+  fileName?: string;
+  mimeType: string;
+}
+
 function buildHeaders(sessionCookie: string, json: boolean): Headers {
   const h = new Headers();
   h.set("Accept", "application/json, text/plain, */*");
@@ -36,6 +54,85 @@ function buildHeaders(sessionCookie: string, json: boolean): Headers {
 
 function buildUrl(path: string): string {
   return `${BASE_URL}${path}?api-version=${API_VERSION}`;
+}
+
+function parseContentDispositionFileName(
+  contentDisposition: string | null
+): string | undefined {
+  if (!contentDisposition) {
+    return undefined;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1];
+  }
+
+  return undefined;
+}
+
+function inferMimeType(
+  fileName: string | undefined,
+  contentType: string | null
+): string {
+  if (contentType && contentType !== "application/octet-stream") {
+    return contentType;
+  }
+
+  const lowerFileName = fileName?.toLowerCase();
+  if (lowerFileName?.endsWith(".pdf")) {
+    return "application/pdf";
+  }
+  if (lowerFileName?.endsWith(".csv")) {
+    return "text/csv;charset=utf-8";
+  }
+
+  return contentType ?? "application/octet-stream";
+}
+
+function arrayBufferToBase64(arrayBuffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(arrayBuffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let start = 0; start < bytes.length; start += chunkSize) {
+    const chunk = bytes.subarray(start, start + chunkSize);
+    for (const byte of chunk) {
+      binary += String.fromCharCode(byte);
+    }
+  }
+
+  return btoa(binary);
+}
+
+async function readExportDocumentResponse(
+  res: Response,
+  label: string
+): Promise<TcgplayerExportedDocument> {
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`TCGPlayer ${label} export failed: ${res.status} ${text}`);
+  }
+
+  const contentDisposition = res.headers.get("content-disposition");
+  const fileName = parseContentDispositionFileName(contentDisposition);
+  const mimeType = inferMimeType(fileName, res.headers.get("content-type"));
+  const arrayBuffer = await res.arrayBuffer();
+
+  if (arrayBuffer.byteLength === 0) {
+    throw new Error(`TCGPlayer ${label} export returned an empty response.`);
+  }
+
+  return {
+    base64Data: arrayBufferToBase64(arrayBuffer),
+    ...(fileName ? { fileName } : {}),
+    mimeType,
+  };
 }
 
 // -- API calls --
@@ -106,6 +203,32 @@ async function getOrderDetail(
   return (await res.json()) as TcgplayerOrderDetail;
 }
 
+async function exportPullSheetsDocument(
+  sessionCookie: string,
+  request: TcgplayerPullSheetRequest
+): Promise<TcgplayerExportedDocument> {
+  const res = await fetch(buildUrl("/orders/pull-sheets/export"), {
+    method: "POST",
+    headers: buildHeaders(sessionCookie, true),
+    body: JSON.stringify(request),
+  });
+
+  return readExportDocumentResponse(res, "pull sheets");
+}
+
+async function exportPackingSlipsDocument(
+  sessionCookie: string,
+  request: TcgplayerPackingSlipRequest
+): Promise<TcgplayerExportedDocument> {
+  const res = await fetch(buildUrl("/orders/packing-slips/export"), {
+    method: "POST",
+    headers: buildHeaders(sessionCookie, true),
+    body: JSON.stringify(request),
+  });
+
+  return readExportDocumentResponse(res, "packing slips");
+}
+
 // -- Public --
 
 export async function fetchTcgplayerOrders(
@@ -157,4 +280,30 @@ export async function fetchTcgplayerOrders(
   }
 
   return results;
+}
+
+export async function exportTcgplayerPullSheets(args: {
+  orderNumbers: Array<string>;
+  timezoneOffset: number;
+}): Promise<TcgplayerExportedDocument> {
+  const sessionCookie = process.env.TCGPLAYER_SESSION_COOKIE!;
+
+  return exportPullSheetsDocument(sessionCookie, {
+    sortingType: "ByRelease",
+    format: "Default",
+    timezoneOffset: args.timezoneOffset,
+    orderNumbers: args.orderNumbers,
+  });
+}
+
+export async function exportTcgplayerPackingSlips(args: {
+  orderNumbers: Array<string>;
+  timezoneOffset: number;
+}): Promise<TcgplayerExportedDocument> {
+  const sessionCookie = process.env.TCGPLAYER_SESSION_COOKIE!;
+
+  return exportPackingSlipsDocument(sessionCookie, {
+    timezoneOffset: args.timezoneOffset,
+    orderNumbers: args.orderNumbers,
+  });
 }

@@ -9,6 +9,7 @@
  */
 
 import type * as cron from "../cron.js";
+import type * as orders_actions from "../orders/actions.js";
 import type * as orders_mappers_manapool from "../orders/mappers/manapool.js";
 import type * as orders_mappers_shared from "../orders/mappers/shared.js";
 import type * as orders_mappers_tcgplayer from "../orders/mappers/tcgplayer.js";
@@ -35,6 +36,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   cron: typeof cron;
+  "orders/actions": typeof orders_actions;
   "orders/mappers/manapool": typeof orders_mappers_manapool;
   "orders/mappers/shared": typeof orders_mappers_shared;
   "orders/mappers/tcgplayer": typeof orders_mappers_tcgplayer;

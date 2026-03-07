@@ -14,15 +14,51 @@ interface ManapoolOrderDetailResponse {
   order: ManapoolOrderDetail;
 }
 
+interface ManapoolOrderFulfillmentRequest {
+  status: "error" | "processing" | "shipped" | "delivered" | "refunded" | "replaced";
+  tracking_company?: string | null;
+  tracking_number?: string | null;
+  tracking_url?: string | null;
+  in_transit_at?: string | null;
+  estimated_delivery_at?: string | null;
+  delivered_at?: string | null;
+}
+
+interface ManapoolOrderFulfillmentResponse {
+  fulfillment: {
+    status: string | null;
+    tracking_company: string | null;
+    tracking_number: string | null;
+    tracking_url: string | null;
+    in_transit_at: string | null;
+    estimated_delivery_at: string | null;
+    delivered_at: string | null;
+  };
+}
+
+function buildHeaders(email: string, token: string): Record<string, string> {
+  return {
+    "X-ManaPool-Email": email,
+    "X-ManaPool-Access-Token": token,
+    "Content-Type": "application/json",
+  };
+}
+
+function requireCredentials() {
+  const email = process.env.MANAPOOL_EMAIL!;
+  const token = process.env.MANAPOOL_ACCESS_TOKEN!;
+
+  return {
+    email,
+    token,
+    headers: buildHeaders(email, token),
+  };
+}
+
 export async function fetchManapoolOrders(
   options: FetchOrdersOptions = {}
 ): Promise<Array<OrderRecord>> {
-  const email = process.env.MANAPOOL_EMAIL!;
-  const token = process.env.MANAPOOL_ACCESS_TOKEN!;
-  const headers = {
-    "X-ManaPool-Email": email,
-    "X-ManaPool-Access-Token": token,
-  };
+  const { headers } = requireCredentials();
 
   const PAGE_SIZE = 100;
   const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
@@ -79,4 +115,42 @@ export async function fetchManapoolOrders(
   }
   console.log(`Fetched ${results.length} Manapool orders`);
   return results;
+}
+
+export async function updateManapoolOrderFulfillment(args: {
+  orderId: string;
+  fulfillment: ManapoolOrderFulfillmentRequest;
+}): Promise<ManapoolOrderFulfillmentResponse["fulfillment"]> {
+  const { headers } = requireCredentials();
+  const res = await fetch(
+    `https://manapool.com/api/v1/seller/orders/${encodeURIComponent(args.orderId)}/fulfillment`,
+    {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(args.fulfillment),
+    }
+  );
+
+  if (!res.ok) {
+    let message = `Manapool fulfillment update failed: ${res.status}`;
+    try {
+      const data = (await res.json()) as {
+        message?: string;
+        details?: Array<string>;
+      };
+      if (typeof data.message === "string" && data.message.trim() !== "") {
+        message = `Manapool fulfillment update failed: ${data.message}`;
+        if (Array.isArray(data.details) && data.details.length > 0) {
+          message += ` (${data.details.join("; ")})`;
+        }
+      }
+    } catch {
+      // Fall back to the HTTP status-only message when the error body is absent.
+    }
+
+    throw new Error(message);
+  }
+
+  const data = (await res.json()) as ManapoolOrderFulfillmentResponse;
+  return data.fulfillment;
 }

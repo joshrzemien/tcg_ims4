@@ -17,6 +17,7 @@ import type { OrderRecord } from '../orders/types'
 
 const DEFAULT_START_DATE = '2025-11-01T00:00:00.000Z'
 const MS_PER_DAY = 24 * 60 * 60 * 1000
+const HISTORICAL_SYNC_WINDOW_DAYS = 30
 
 type HistoricalOrder = {
   _id: string
@@ -98,6 +99,98 @@ function parseDateArg(value: string | undefined, fallbackIso?: string): Date {
   }
 
   return parsed
+}
+
+function buildDateWindows(
+  startDate: Date,
+  endDate: Date,
+  windowDays: number,
+): Array<{ start: Date; end: Date }> {
+  if (startDate.getTime() > endDate.getTime()) {
+    return []
+  }
+
+  const windows: Array<{ start: Date; end: Date }> = []
+  let windowStart = new Date(startDate.getTime())
+
+  while (windowStart.getTime() <= endDate.getTime()) {
+    const nextWindowStart = new Date(
+      windowStart.getTime() + windowDays * MS_PER_DAY,
+    )
+    const windowEnd = new Date(
+      Math.min(nextWindowStart.getTime() - 1, endDate.getTime()),
+    )
+    windows.push({ start: windowStart, end: windowEnd })
+    windowStart = nextWindowStart
+  }
+
+  return windows
+}
+
+async function fetchHistoricalShipmentsWindow(
+  apiKey: string,
+  startDate: Date,
+  endDate: Date,
+): Promise<Array<any>> {
+  let hasMore = true
+  let beforeId: string | undefined
+  const shipments: Array<any> = []
+  const queryStart = new Date(startDate.getTime() - 1)
+  const queryEnd = new Date(endDate.getTime() + 1)
+
+  while (hasMore) {
+    const params = new URLSearchParams({
+      page_size: '100',
+      start_datetime: queryStart.toISOString(),
+      end_datetime: queryEnd.toISOString(),
+    })
+    if (beforeId) params.set('before_id', beforeId)
+
+    const res = await fetch(
+      `https://api.easypost.com/v2/shipments?${params}`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      },
+    )
+
+    if (!res.ok) {
+      throw new Error(`EasyPost list failed: ${res.status} ${await res.text()}`)
+    }
+
+    const data = await res.json()
+    const pageShipments = (data.shipments ?? []).filter((shipment: any) => {
+      if (!shipment.created_at) return false
+      const createdAt = new Date(shipment.created_at).getTime()
+      return (
+        createdAt >= startDate.getTime() && createdAt <= endDate.getTime()
+      )
+    })
+    shipments.push(...pageShipments)
+
+    console.log(
+      `Window ${startDate.toISOString()} - ${endDate.toISOString()} page fetched: ${pageShipments.length} shipments kept, has_more: ${data.has_more}, total so far: ${shipments.length}`,
+    )
+
+    const fetchedShipments = data.shipments ?? []
+    hasMore = data.has_more === true && fetchedShipments.length > 0
+    if (fetchedShipments.length > 0) {
+      beforeId = fetchedShipments[fetchedShipments.length - 1].id
+    }
+  }
+
+  shipments.sort((left, right) => {
+    const leftTime = left.created_at
+      ? new Date(left.created_at).getTime()
+      : Number.NEGATIVE_INFINITY
+    const rightTime = right.created_at
+      ? new Date(right.created_at).getTime()
+      : Number.NEGATIVE_INFINITY
+    return rightTime - leftTime
+  })
+
+  return shipments
 }
 
 function createdAtMs(value: unknown): number {
@@ -372,6 +465,7 @@ export const syncHistorical = internalAction({
     const apiKey = process.env.EASYPOST_API_KEY!
     const startDate = parseDateArg(args.startDate, DEFAULT_START_DATE)
     const endDate = args.endDate ? parseDateArg(args.endDate) : undefined
+    const syncEndDate = endDate ?? new Date()
     const backfillOrders = args.backfillOrders ?? true
     const orderBatchSize = args.orderBatchSize ?? 25
     const orderLookbackDays = args.orderLookbackDays ?? 45
@@ -380,51 +474,15 @@ export const syncHistorical = internalAction({
     const minimumMatchScore = args.minimumMatchScore ?? 85
     const requireUniqueTopScore = args.requireUniqueTopScore ?? true
     const preferUnlinkedOrders = args.preferUnlinkedOrders ?? true
+    const windows = buildDateWindows(
+      startDate,
+      syncEndDate,
+      HISTORICAL_SYNC_WINDOW_DAYS,
+    )
 
-    let hasMore = true
-    let beforeId: string | undefined
-    const allShipments: Array<any> = []
-
-    while (hasMore) {
-      const params = new URLSearchParams({
-        page_size: '100',
-        start_datetime: startDate.toISOString(),
-      })
-      if (beforeId) params.set('before_id', beforeId)
-
-      const res = await fetch(
-        `https://api.easypost.com/v2/shipments?${params}`,
-        {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-          },
-        },
-      )
-
-      if (!res.ok) {
-        throw new Error(
-          `EasyPost list failed: ${res.status} ${await res.text()}`,
-        )
-      }
-
-      const data = await res.json()
-      const pageShipments = (data.shipments ?? []).filter((shipment: any) => {
-        if (!endDate || !shipment.created_at) return true
-        return new Date(shipment.created_at).getTime() <= endDate.getTime()
-      })
-      allShipments.push(...pageShipments)
-
-      console.log(
-        `Page fetched: ${pageShipments.length} shipments kept, has_more: ${data.has_more}, total so far: ${allShipments.length}`,
-      )
-
-      const fetchedShipments = data.shipments ?? []
-      hasMore = data.has_more === true && fetchedShipments.length > 0
-      if (fetchedShipments.length > 0) {
-        beforeId = fetchedShipments[fetchedShipments.length - 1].id
-      }
-    }
-    console.log(`Fetched ${allShipments.length} shipments from EasyPost`)
+    console.log(
+      `Historical shipment sync will process ${windows.length} window(s) of up to ${HISTORICAL_SYNC_WINDOW_DAYS} days from ${startDate.toISOString()} through ${syncEndDate.toISOString()}`,
+    )
 
     if (backfillOrders) {
       const [manapoolOrders, tcgplayerOrders] = await Promise.all([
@@ -451,9 +509,8 @@ export const syncHistorical = internalAction({
     )) as Array<HistoricalOrder>
     const earliestOrderTime =
       startDate.getTime() - orderLookbackDays * MS_PER_DAY
-    const latestOrderTime = endDate
-      ? endDate.getTime() + orderLookaheadDays * MS_PER_DAY
-      : Number.POSITIVE_INFINITY
+    const latestOrderTime =
+      syncEndDate.getTime() + orderLookaheadDays * MS_PER_DAY
 
     const normalizedOrders = orders
       .filter((order) => {
@@ -482,153 +539,169 @@ export const syncHistorical = internalAction({
     const ordersByZip = indexOrdersByField(normalizedOrders, 'zip')
     const ordersByStreet = indexOrdersByField(normalizedOrders, 'street')
 
+    let total = 0
     let matched = 0
     let unmatched = 0
     let weakMatches = 0
     let ambiguousMatches = 0
     const usedOrderIds = new Set<string>()
 
-    for (const ep of allShipments) {
-      const toAddr = ep.to_address
-      const shipmentAddress = normalizeAddress({
-        street1: toAddr?.street1,
-        city: toAddr?.city,
-        state: toAddr?.state,
-        zip: toAddr?.zip,
-        country: toAddr?.country,
-      })
-      const shipmentRecipient = normalizeRecipient(toAddr?.name)
-      const shipmentRecipientSet = recipientTokens(shipmentRecipient)
-      const shipmentTime = ep.created_at
-        ? new Date(ep.created_at).getTime()
-        : Date.now()
-
-      const candidatePool = candidatePoolForShipment(
-        ordersByZip,
-        ordersByStreet,
-        shipmentAddress,
+    for (const window of [...windows].reverse()) {
+      const windowShipments = await fetchHistoricalShipmentsWindow(
+        apiKey,
+        window.start,
+        window.end,
       )
-      const ranked = candidatePool
-        .map((candidate) =>
-          scoreCandidate({
-            shipmentAddress,
-            shipmentRecipient,
-            shipmentRecipientTokens: shipmentRecipientSet,
-            shipmentTime,
-            order: candidate,
-            usedOrderIds,
-            orderLookbackDays,
-            orderLookaheadDays,
-            maxTimeDistanceDays,
-            preferUnlinkedOrders,
-          }),
+      total += windowShipments.length
+
+      console.log(
+        `Processing ${windowShipments.length} shipment(s) for window ${window.start.toISOString()} - ${window.end.toISOString()}`,
+      )
+
+      for (const ep of windowShipments) {
+        const toAddr = ep.to_address
+        const shipmentAddress = normalizeAddress({
+          street1: toAddr?.street1,
+          city: toAddr?.city,
+          state: toAddr?.state,
+          zip: toAddr?.zip,
+          country: toAddr?.country,
+        })
+        const shipmentRecipient = normalizeRecipient(toAddr?.name)
+        const shipmentRecipientSet = recipientTokens(shipmentRecipient)
+        const shipmentTime = ep.created_at
+          ? new Date(ep.created_at).getTime()
+          : Date.now()
+
+        const candidatePool = candidatePoolForShipment(
+          ordersByZip,
+          ordersByStreet,
+          shipmentAddress,
         )
-        .filter((candidate): candidate is CandidateScore => candidate !== null)
-        .sort((left, right) => {
-          if (right.score !== left.score) return right.score - left.score
-          return left.timeDistanceMs - right.timeDistanceMs
+        const ranked = candidatePool
+          .map((candidate) =>
+            scoreCandidate({
+              shipmentAddress,
+              shipmentRecipient,
+              shipmentRecipientTokens: shipmentRecipientSet,
+              shipmentTime,
+              order: candidate,
+              usedOrderIds,
+              orderLookbackDays,
+              orderLookaheadDays,
+              maxTimeDistanceDays,
+              preferUnlinkedOrders,
+            }),
+          )
+          .filter((candidate): candidate is CandidateScore => candidate !== null)
+          .sort((left, right) => {
+            if (right.score !== left.score) return right.score - left.score
+            return left.timeDistanceMs - right.timeDistanceMs
+          })
+
+        const bestMatch = ranked.length > 0 ? ranked[0] : undefined
+        const runnerUp = ranked.length > 1 ? ranked[1] : undefined
+        const isStrongEnough =
+          bestMatch != null && bestMatch.score >= minimumMatchScore
+        const isAmbiguous =
+          requireUniqueTopScore &&
+          bestMatch != null &&
+          runnerUp != null &&
+          runnerUp.score === bestMatch.score &&
+          runnerUp.timeDistanceMs === bestMatch.timeDistanceMs
+
+        const order =
+          isStrongEnough && !isAmbiguous ? bestMatch.candidate.order : null
+
+        const trackingStatus =
+          ep.tracker && (ep.tracker.id != null || ep.tracker.status != null)
+            ? normalizeShippingStatus(ep.tracker.status)
+            : undefined
+        const refundStatus =
+          typeof ep.refund_status === 'string' ? ep.refund_status : undefined
+        const purchased = !!(ep.tracking_code && ep.postage_label?.label_url)
+        const status = deriveShipmentShippingStatus({
+          status: purchased ? 'purchased' : 'created',
+          trackingStatus,
+          refundStatus,
+          trackingNumber: ep.tracking_code,
+          labelUrl: ep.postage_label?.label_url,
+          easypostTrackerId: ep.tracker?.id,
+        })
+        const shippingMethod = deriveEasyPostShippingMethod({
+          carrier: ep.selected_rate?.carrier,
+          service: ep.selected_rate?.service,
         })
 
-      const bestMatch = ranked.length > 0 ? ranked[0] : undefined
-      const runnerUp = ranked.length > 1 ? ranked[1] : undefined
-      const isStrongEnough =
-        bestMatch != null && bestMatch.score >= minimumMatchScore
-      const isAmbiguous =
-        requireUniqueTopScore &&
-        bestMatch != null &&
-        runnerUp != null &&
-        runnerUp.score === bestMatch.score &&
-        runnerUp.timeDistanceMs === bestMatch.timeDistanceMs
-
-      const order =
-        isStrongEnough && !isAmbiguous ? bestMatch.candidate.order : null
-
-      const trackingStatus =
-        ep.tracker && (ep.tracker.id != null || ep.tracker.status != null)
-          ? normalizeShippingStatus(ep.tracker.status)
-          : undefined
-      const refundStatus =
-        typeof ep.refund_status === 'string' ? ep.refund_status : undefined
-      const purchased = !!(ep.tracking_code && ep.postage_label?.label_url)
-      const status = deriveShipmentShippingStatus({
-        status: purchased ? 'purchased' : 'created',
-        trackingStatus,
-        refundStatus,
-        trackingNumber: ep.tracking_code,
-        labelUrl: ep.postage_label?.label_url,
-        easypostTrackerId: ep.tracker?.id,
-      })
-      const shippingMethod = deriveEasyPostShippingMethod({
-        carrier: ep.selected_rate?.carrier,
-        service: ep.selected_rate?.service,
-      })
-
-      const shipment: any = {
-        orderId: order?._id ?? undefined,
-        status,
-        easypostShipmentId: ep.id,
-        ...(shippingMethod && { shippingMethod }),
-        ...(trackingStatus && { trackingStatus }),
-        addressVerified: true,
-        toAddress: snapshotEasyPostAddress(toAddr),
-        toAddressId: toAddr?.id,
-        fromAddressId: ep.from_address?.id,
-        rates: (ep.rates ?? []).map((r: any) => ({
-          rateId: r.id,
-          carrier: r.carrier,
-          service: r.service,
-          rateCents: Math.round(parseFloat(r.rate) * 100),
-          ...(r.delivery_days != null && { deliveryDays: r.delivery_days }),
-        })),
-        ...(ep.tracking_code && { trackingNumber: ep.tracking_code }),
-        ...(ep.postage_label?.label_url && {
-          labelUrl: ep.postage_label.label_url,
-        }),
-        ...(ep.selected_rate?.rate && {
-          rateCents: Math.round(parseFloat(ep.selected_rate.rate) * 100),
-        }),
-        ...(ep.selected_rate?.carrier && { carrier: ep.selected_rate.carrier }),
-        ...(ep.selected_rate?.service && { service: ep.selected_rate.service }),
-        ...(ep.tracker?.id && { easypostTrackerId: ep.tracker.id }),
-        ...(ep.tracker?.public_url && {
-          trackerPublicUrl: ep.tracker.public_url,
-        }),
-        ...(refundStatus && { refundStatus }),
-        createdAt: shipmentTime,
-        updatedAt: Date.now(),
-      }
-
-      if (order) {
-        matched++
-        usedOrderIds.add(order._id)
-      } else {
-        unmatched++
-
-        if (bestMatch == null) {
-          console.warn(`No order match for shipment ${ep.id}`)
-        } else if (!isStrongEnough) {
-          weakMatches++
-          console.warn(
-            `Rejected weak order match for shipment ${ep.id}: score=${bestMatch.score}, order=${bestMatch.candidate.order.orderNumber}, reasons=${bestMatch.reasons.join(',')}`,
-          )
-        } else if (isAmbiguous) {
-          ambiguousMatches++
-          console.warn(
-            `Rejected ambiguous order match for shipment ${ep.id}: top score=${bestMatch.score}, candidates=${ranked
-              .slice(0, 3)
-              .map((candidate) => candidate.candidate.order.orderNumber)
-              .join(', ')}`,
-          )
+        const shipment: any = {
+          orderId: order?._id ?? undefined,
+          status,
+          easypostShipmentId: ep.id,
+          ...(shippingMethod && { shippingMethod }),
+          ...(trackingStatus && { trackingStatus }),
+          addressVerified: true,
+          toAddress: snapshotEasyPostAddress(toAddr),
+          toAddressId: toAddr?.id,
+          fromAddressId: ep.from_address?.id,
+          rates: (ep.rates ?? []).map((r: any) => ({
+            rateId: r.id,
+            carrier: r.carrier,
+            service: r.service,
+            rateCents: Math.round(parseFloat(r.rate) * 100),
+            ...(r.delivery_days != null && { deliveryDays: r.delivery_days }),
+          })),
+          ...(ep.tracking_code && { trackingNumber: ep.tracking_code }),
+          ...(ep.postage_label?.label_url && {
+            labelUrl: ep.postage_label.label_url,
+          }),
+          ...(ep.selected_rate?.rate && {
+            rateCents: Math.round(parseFloat(ep.selected_rate.rate) * 100),
+          }),
+          ...(ep.selected_rate?.carrier && {
+            carrier: ep.selected_rate.carrier,
+          }),
+          ...(ep.selected_rate?.service && { service: ep.selected_rate.service }),
+          ...(ep.tracker?.id && { easypostTrackerId: ep.tracker.id }),
+          ...(ep.tracker?.public_url && {
+            trackerPublicUrl: ep.tracker.public_url,
+          }),
+          ...(refundStatus && { refundStatus }),
+          createdAt: shipmentTime,
+          updatedAt: Date.now(),
         }
-      }
 
-      await ctx.runMutation(internal.shipments.mutations.upsertShipment, {
-        shipment,
-      })
+        if (order) {
+          matched++
+          usedOrderIds.add(order._id)
+        } else {
+          unmatched++
+
+          if (bestMatch == null) {
+            console.warn(`No order match for shipment ${ep.id}`)
+          } else if (!isStrongEnough) {
+            weakMatches++
+            console.warn(
+              `Rejected weak order match for shipment ${ep.id}: score=${bestMatch.score}, order=${bestMatch.candidate.order.orderNumber}, reasons=${bestMatch.reasons.join(',')}`,
+            )
+          } else if (isAmbiguous) {
+            ambiguousMatches++
+            console.warn(
+              `Rejected ambiguous order match for shipment ${ep.id}: top score=${bestMatch.score}, candidates=${ranked
+                .slice(0, 3)
+                .map((candidate) => candidate.candidate.order.orderNumber)
+                .join(', ')}`,
+            )
+          }
+        }
+
+        await ctx.runMutation(internal.shipments.mutations.upsertShipment, {
+          shipment,
+        })
+      }
     }
 
     return {
-      total: allShipments.length,
+      total,
       matched,
       unmatched,
       weakMatches,
