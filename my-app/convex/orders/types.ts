@@ -34,6 +34,8 @@ export interface OrderItemRecord {
   collectorNumber?: string;
   scryfallId?: string;
   tcgplayerSku?: number;
+  catalogProductKey?: string;
+  catalogSkuKey?: string;
 }
 
 export interface OrderRecord {

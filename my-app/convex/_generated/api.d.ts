@@ -8,6 +8,12 @@
  * @module
  */
 
+import type * as catalog_config from "../catalog/config.js";
+import type * as catalog_mutations from "../catalog/mutations.js";
+import type * as catalog_queries from "../catalog/queries.js";
+import type * as catalog_sources_tcgtracking from "../catalog/sources/tcgtracking.js";
+import type * as catalog_sync from "../catalog/sync.js";
+import type * as catalog_syncState from "../catalog/syncState.js";
 import type * as cron from "../cron.js";
 import type * as orders_actions from "../orders/actions.js";
 import type * as orders_mappers_manapool from "../orders/mappers/manapool.js";
@@ -35,6 +41,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "catalog/config": typeof catalog_config;
+  "catalog/mutations": typeof catalog_mutations;
+  "catalog/queries": typeof catalog_queries;
+  "catalog/sources/tcgtracking": typeof catalog_sources_tcgtracking;
+  "catalog/sync": typeof catalog_sync;
+  "catalog/syncState": typeof catalog_syncState;
   cron: typeof cron;
   "orders/actions": typeof orders_actions;
   "orders/mappers/manapool": typeof orders_mappers_manapool;
