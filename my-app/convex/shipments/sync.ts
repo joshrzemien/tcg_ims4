@@ -716,14 +716,14 @@ export const refreshActiveStatuses = internalAction({
     const apiKey = process.env.EASYPOST_API_KEY!
     const max = limit ?? 100
     const shipments = (await ctx.runQuery(
-      api.shipments.queries.list,
+      api.shipments.queries.listRefreshCandidates,
+      { limit: max },
     )) as Array<StoredShipment>
     const candidates = shipments
       .filter(
         (shipment) =>
           shipment.orderId && !isTerminalShipmentStatus(shipment.status),
       )
-      .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
       .slice(0, max)
 
     let updated = 0

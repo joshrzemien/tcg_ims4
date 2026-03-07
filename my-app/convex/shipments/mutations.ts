@@ -1,14 +1,13 @@
 import { v } from 'convex/values'
 import { internalMutation, mutation } from '../_generated/server'
+import { deriveShipmentShippingMethod } from '../../shared/shippingMethod'
 import {
-  deriveOrderShippingMethod,
-  deriveShipmentShippingMethod,
-} from '../../shared/shippingMethod'
-import {
-  deriveOrderShippingStatus,
   deriveShipmentShippingStatus,
-  pickLatestShipment,
 } from '../utils/shippingStatus'
+import {
+  buildOrderShipmentState,
+  materializedOrderShipmentStateEquals,
+} from '../orders/shipmentSummary'
 
 async function syncOrderDerivedFields(ctx: { db: any }, orderId: any) {
   if (!orderId) return
@@ -19,11 +18,17 @@ async function syncOrderDerivedFields(ctx: { db: any }, orderId: any) {
     .query('shipments')
     .withIndex('by_orderId', (q: any) => q.eq('orderId', orderId))
     .collect()
-  const latestShipment = pickLatestShipment<any>(shipments)
+  const shipmentState = buildOrderShipmentState({
+    order,
+    shipments,
+  })
+
+  if (materializedOrderShipmentStateEquals(order, shipmentState)) {
+    return
+  }
 
   await ctx.db.patch('orders', orderId, {
-    shippingMethod: deriveOrderShippingMethod({ order, latestShipment }),
-    shippingStatus: deriveOrderShippingStatus({ order, latestShipment }),
+    ...shipmentState,
     updatedAt: Date.now(),
   })
 }
@@ -44,13 +49,19 @@ export const upsertShipment = internalMutation({
       ...(shippingMethod && { shippingMethod }),
       status: deriveShipmentShippingStatus(nextShipment),
     }
+    const previousOrderId = existing?.orderId
 
     if (existing) {
       await ctx.db.patch('shipments', existing._id, persistedShipment)
-      await syncOrderDerivedFields(ctx, shipment.orderId ?? existing.orderId)
     } else {
       await ctx.db.insert('shipments', persistedShipment)
-      await syncOrderDerivedFields(ctx, shipment.orderId)
+    }
+
+    const nextOrderId = shipment.orderId ?? existing?.orderId
+    await syncOrderDerivedFields(ctx, nextOrderId)
+
+    if (previousOrderId && previousOrderId !== nextOrderId) {
+      await syncOrderDerivedFields(ctx, previousOrderId)
     }
   },
 })
