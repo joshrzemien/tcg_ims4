@@ -14,6 +14,12 @@ crons.interval(
   internal.catalog.sync.syncCatalogWindow,
   { limit: 5 },
 )
+crons.interval(
+  'pricing:tracked_sets',
+  { hours: 6 },
+  internal.pricing.sync.enqueueStaleTrackedSetRefreshes,
+  { limit: 25 },
+)
 // TODO: After the initial backfill, revisit this cadence together with the per-run
 // limit. The current 15m x 5 window keeps load bounded, but it cannot keep up with
 // daily pricing/SKU churn across the full allowed catalog.

@@ -28,6 +28,25 @@ const catalogSyncStatusValidator = v.union(
   v.literal('error'),
 )
 
+const pricingTrackingRuleTypeValidator = v.union(
+  v.literal('manual_product'),
+  v.literal('set'),
+  v.literal('category'),
+)
+
+const pricingSourceValidator = v.union(
+  v.literal('sku'),
+  v.literal('product_fallback'),
+  v.literal('unavailable'),
+)
+
+const pricingResolutionIssueTypeValidator = v.union(
+  v.literal('ambiguous_nm_en_sku'),
+  v.literal('unmapped_printing'),
+  v.literal('missing_product_price'),
+  v.literal('missing_manapool_match'),
+)
+
 // The schema is entirely optional.
 // You can delete this file (schema.ts) and the
 // app will continue to work.
@@ -109,7 +128,11 @@ export default defineSchema({
     .index('by_key', ['key'])
     .index('by_tcgplayerProductId', ['tcgplayerProductId'])
     .index('by_setKey', ['setKey'])
-    .index('by_setKey_lastIngestedAt', ['setKey', 'lastIngestedAt']),
+    .index('by_setKey_lastIngestedAt', ['setKey', 'lastIngestedAt'])
+    .searchIndex('search_cleanName', {
+      searchField: 'cleanName',
+      filterFields: ['categoryKey', 'setKey'],
+    }),
   catalogSkus: defineTable({
     key: v.string(),
     catalogProductKey: v.string(),
@@ -135,6 +158,117 @@ export default defineSchema({
     .index('by_catalogProductKey', ['catalogProductKey'])
     .index('by_setKey', ['setKey'])
     .index('by_setKey_lastIngestedAt', ['setKey', 'lastIngestedAt']),
+  pricingTrackingRules: defineTable({
+    ruleType: pricingTrackingRuleTypeValidator,
+    label: v.string(),
+    active: v.boolean(),
+    categoryKey: v.optional(v.string()),
+    setKey: v.optional(v.string()),
+    catalogProductKey: v.optional(v.string()),
+    seedExistingSets: v.optional(v.boolean()),
+    autoTrackFutureSets: v.optional(v.boolean()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_active', ['active'])
+    .index('by_ruleType', ['ruleType'])
+    .index('by_categoryKey', ['categoryKey'])
+    .index('by_setKey', ['setKey'])
+    .index('by_catalogProductKey', ['catalogProductKey']),
+  pricingTrackedSeries: defineTable({
+    key: v.string(),
+    catalogProductKey: v.string(),
+    categoryKey: v.string(),
+    setKey: v.string(),
+    tcgtrackingCategoryId: v.number(),
+    tcgtrackingSetId: v.number(),
+    tcgplayerProductId: v.number(),
+    name: v.string(),
+    number: v.optional(v.string()),
+    rarity: v.optional(v.string()),
+    printingKey: v.string(),
+    printingLabel: v.string(),
+    skuVariantCode: v.optional(v.string()),
+    pricingSource: pricingSourceValidator,
+    preferredCatalogSkuKey: v.optional(v.string()),
+    preferredTcgplayerSku: v.optional(v.number()),
+    currentTcgMarketPriceCents: v.optional(v.number()),
+    currentTcgLowPriceCents: v.optional(v.number()),
+    currentTcgHighPriceCents: v.optional(v.number()),
+    currentListingCount: v.optional(v.number()),
+    currentManapoolPriceCents: v.optional(v.number()),
+    currentManapoolQuantity: v.optional(v.number()),
+    lastSnapshotFingerprint: v.optional(v.string()),
+    lastSnapshotAt: v.optional(v.number()),
+    lastResolvedAt: v.number(),
+    activeRuleCount: v.number(),
+    active: v.boolean(),
+    updatedAt: v.number(),
+  })
+    .index('by_key', ['key'])
+    .index('by_active', ['active'])
+    .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_setKey', ['setKey'])
+    .index('by_categoryKey', ['categoryKey'])
+    .index('by_active_setKey', ['active', 'setKey']),
+  pricingTrackedSeriesRules: defineTable({
+    key: v.string(),
+    ruleId: v.id('pricingTrackingRules'),
+    seriesKey: v.string(),
+    catalogProductKey: v.string(),
+    setKey: v.string(),
+    categoryKey: v.string(),
+    active: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_key', ['key'])
+    .index('by_ruleId', ['ruleId'])
+    .index('by_seriesKey', ['seriesKey'])
+    .index('by_seriesKey_active', ['seriesKey', 'active'])
+    .index('by_setKey', ['setKey']),
+  pricingHistory: defineTable({
+    seriesKey: v.string(),
+    catalogProductKey: v.string(),
+    catalogSkuKey: v.optional(v.string()),
+    setKey: v.string(),
+    categoryKey: v.string(),
+    printingKey: v.string(),
+    printingLabel: v.string(),
+    capturedAt: v.number(),
+    effectiveAt: v.number(),
+    pricingSource: v.union(v.literal('sku'), v.literal('product_fallback')),
+    tcgMarketPriceCents: v.optional(v.number()),
+    tcgLowPriceCents: v.optional(v.number()),
+    tcgHighPriceCents: v.optional(v.number()),
+    listingCount: v.optional(v.number()),
+    manapoolPriceCents: v.optional(v.number()),
+    manapoolQuantity: v.optional(v.number()),
+    snapshotFingerprint: v.string(),
+    sourcePricingUpdatedAt: v.optional(v.number()),
+    sourceSkuPricingUpdatedAt: v.optional(v.number()),
+  })
+    .index('by_seriesKey_effectiveAt', ['seriesKey', 'effectiveAt'])
+    .index('by_catalogProductKey_effectiveAt', ['catalogProductKey', 'effectiveAt'])
+    .index('by_setKey_effectiveAt', ['setKey', 'effectiveAt']),
+  pricingResolutionIssues: defineTable({
+    key: v.string(),
+    catalogProductKey: v.string(),
+    seriesKey: v.string(),
+    setKey: v.string(),
+    categoryKey: v.string(),
+    issueType: pricingResolutionIssueTypeValidator,
+    details: v.any(),
+    firstSeenAt: v.number(),
+    lastSeenAt: v.number(),
+    occurrenceCount: v.number(),
+    active: v.boolean(),
+  })
+    .index('by_key', ['key'])
+    .index('by_active', ['active'])
+    .index('by_seriesKey', ['seriesKey'])
+    .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_setKey', ['setKey']),
   shipments: defineTable({
     orderId: v.optional(v.id('orders')),
     status: shippingStatusValidator, // Canonical EasyPost-derived order shipping status

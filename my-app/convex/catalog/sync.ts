@@ -327,6 +327,10 @@ async function syncSingleSet(ctx: ActionCtx, setKey: string) {
       setKey,
       completedAt,
     })
+    await ctx.scheduler.runAfter(0, internal.pricing.sync.processSetAfterCatalogSync, {
+      setKey,
+      syncStartedAt,
+    })
 
     return {
       setKey,
@@ -426,7 +430,7 @@ async function runCatalogWindow(
     metadataRefreshed = true
   }
 
-  const candidates = await ctx.runMutation(
+  const candidates: Array<{ key: string; syncPriority: number }> = await ctx.runMutation(
     internal.catalog.mutations.claimSyncCandidates,
     {
       limit: maxSets,
