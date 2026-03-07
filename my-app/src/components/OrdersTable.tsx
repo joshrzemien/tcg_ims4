@@ -460,6 +460,8 @@ function Modal({
 
 // -- Stats Bar --
 function StatsBar({ orders }: { orders: Array<OrderRow> }) {
+  // TODO: These dashboard metrics are computed from the current page only.
+  // Replace them with server-backed aggregate stats if we keep pagination.
   const stats = useMemo(() => {
     const totalRevenue = orders.reduce((sum, o) => sum + o.totalAmountCents, 0)
     const totalItems = orders.reduce((sum, o) => sum + o.itemCount, 0)
@@ -1084,6 +1086,7 @@ export function OrdersTable() {
             <h2 className="text-xs font-semibold text-foreground">
               Orders
             </h2>
+            {/* TODO: This is the current page size, not the full result count for the active filter. */}
             <span className="text-[10px] tabular-nums text-muted-foreground">
               {rows.length} shown
             </span>
