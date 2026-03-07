@@ -21,6 +21,7 @@ import type * as orders_mappers_shared from "../orders/mappers/shared.js";
 import type * as orders_mappers_tcgplayer from "../orders/mappers/tcgplayer.js";
 import type * as orders_mutations from "../orders/mutations.js";
 import type * as orders_queries from "../orders/queries.js";
+import type * as orders_shipmentSummary from "../orders/shipmentSummary.js";
 import type * as orders_sources_manapool from "../orders/sources/manapool.js";
 import type * as orders_sources_tcgplayer from "../orders/sources/tcgplayer.js";
 import type * as orders_sync from "../orders/sync.js";
@@ -58,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   "orders/mappers/tcgplayer": typeof orders_mappers_tcgplayer;
   "orders/mutations": typeof orders_mutations;
   "orders/queries": typeof orders_queries;
+  "orders/shipmentSummary": typeof orders_shipmentSummary;
   "orders/sources/manapool": typeof orders_sources_manapool;
   "orders/sources/tcgplayer": typeof orders_sources_tcgplayer;
   "orders/sync": typeof orders_sync;

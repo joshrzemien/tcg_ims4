@@ -68,9 +68,7 @@ export function mapTcgplayerOrder(order: TcgplayerOrderDetail): OrderRecord {
     customerName: order.buyerName ?? 'Unknown',
     status: platformStatus,
     shippingStatus: platformStatus,
-    ...(shouldMarkOrderFulfilled(platformStatus)
-      ? { fulfillmentStatus: true }
-      : {}),
+    fulfillmentStatus: shouldMarkOrderFulfilled(platformStatus),
     shippingMethod: deriveTcgplayerShippingMethod({
       shippingType: order.shippingType,
       totalAmountCents,

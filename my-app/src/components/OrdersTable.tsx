@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   createColumnHelper,
   flexRender,
@@ -146,7 +146,7 @@ type ExportDocumentResult = {
   orderCount: number
 }
 
-type PresetFilter = 'all' | 'last7' | 'last30' | 'unfulfilled' | 'not_delivered'
+type PresetFilter = 'all' | 'last7' | 'last30' | 'unfulfilled'
 
 type FlashMessage =
   | {
@@ -156,6 +156,7 @@ type FlashMessage =
   | null
 
 const columnHelper = createColumnHelper<OrderRow>()
+const EMPTY_ROWS: Array<OrderRow> = []
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -527,18 +528,37 @@ function StatsBar({ orders }: { orders: Array<OrderRow> }) {
 }
 
 export function OrdersTable() {
-  const [activeFilter, setActiveFilter] = useState<PresetFilter>('all')
+  const [activeFilter, setActiveFilter] = useState<PresetFilter>('unfulfilled')
+  const [filterReferenceTime, setFilterReferenceTime] = useState(() => Date.now())
   const [pageSize, setPageSize] = useState(20)
   const [pageIndex, setPageIndex] = useState(0)
   const [pageCursors, setPageCursors] = useState<Array<string | null>>([null])
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
-  const ordersPage = useQuery(api.orders.queries.listPage, {
-    filter: activeFilter,
-    paginationOpts: {
-      cursor: pageCursors[pageIndex] ?? null,
-      numItems: pageSize,
-    },
-  }) as OrdersPage | undefined
+  const cutoffTimestamp = useMemo(() => {
+    switch (activeFilter) {
+      case 'last7':
+        return filterReferenceTime - 7 * 24 * 60 * 60 * 1000
+      case 'last30':
+        return filterReferenceTime - 30 * 24 * 60 * 60 * 1000
+      default:
+        return undefined
+    }
+  }, [activeFilter, filterReferenceTime])
+  const ordersQueryArgs = useMemo(
+    () => ({
+      filter: activeFilter,
+      ...(typeof cutoffTimestamp === 'number' ? { cutoffTimestamp } : {}),
+      paginationOpts: {
+        cursor: pageCursors[pageIndex] ?? null,
+        numItems: pageSize,
+      },
+    }),
+    [activeFilter, cutoffTimestamp, pageCursors, pageIndex, pageSize],
+  )
+  const ordersPage = useQuery(
+    api.orders.queries.listPage,
+    ordersQueryArgs,
+  ) as OrdersPage | undefined
   const exportPullSheets = useAction(api.orders.actions.exportPullSheets)
   const exportPackingSlips = useAction(api.orders.actions.exportPackingSlips)
   const previewPurchase = useAction(api.shipments.actions.previewPurchase)
@@ -560,7 +580,10 @@ export function OrdersTable() {
   const [refundingShipmentId, setRefundingShipmentId] = useState<
     Doc<'shipments'>['_id'] | null
   >(null)
-  const rows = ordersPage?.page ?? []
+  const rows = ordersPage?.page ?? EMPTY_ROWS
+  const isOrdersPageLoading = ordersPage === undefined
+  const isOnLastPage = ordersPage?.isDone ?? true
+  const nextPageCursor = ordersPage?.continueCursor ?? null
   const currentManagedOrder = managedOrder
     ? rows.find((order) => order._id === managedOrder._id) ?? managedOrder
     : null
@@ -597,10 +620,11 @@ export function OrdersTable() {
     setPageCursors([null])
     if (nextFilter) {
       setActiveFilter(nextFilter)
+      setFilterReferenceTime(Date.now())
     }
   }
 
-  async function openPurchaseModal(order: OrderRow) {
+  const openPurchaseModal = useCallback(async (order: OrderRow) => {
     setFlashMessage(null)
     setPurchaseOrder(order)
     setPurchaseQuote(null)
@@ -618,7 +642,7 @@ export function OrdersTable() {
     } finally {
       setIsPreviewing(false)
     }
-  }
+  }, [previewPurchase])
 
   function closePurchaseModal() {
     setPurchaseOrder(null)
@@ -629,11 +653,11 @@ export function OrdersTable() {
     setIsPurchasing(false)
   }
 
-  function openManageModal(order: OrderRow) {
+  const openManageModal = useCallback((order: OrderRow) => {
     setFlashMessage(null)
     setManagedOrder(order)
     setRefundError(null)
-  }
+  }, [])
 
   function closeManageModal() {
     setManagedOrder(null)
@@ -773,7 +797,7 @@ export function OrdersTable() {
     }
   }
 
-  const columns = [
+  const columns = useMemo(() => [
     columnHelper.accessor('orderNumber', {
       header: 'Order',
       cell: (info) => {
@@ -999,7 +1023,7 @@ export function OrdersTable() {
         )
       },
     }),
-  ]
+  ], [openManageModal, openPurchaseModal])
 
   const table = useReactTable({
     data: rows,
@@ -1009,6 +1033,7 @@ export function OrdersTable() {
     enableRowSelection: true,
     onRowSelectionChange: setRowSelection,
     state: { rowSelection },
+    autoResetAll: false,
   })
 
   const isAllPageRowsSelected = table.getIsAllPageRowsSelected()
@@ -1090,11 +1115,10 @@ export function OrdersTable() {
           </div>
           <div className="flex items-center gap-1">
             {([
+              ['unfulfilled', 'Unfulfilled'],
               ['all', 'All'],
               ['last7', '7d'],
               ['last30', '30d'],
-              ['unfulfilled', 'Unfulfilled'],
-              ['not_delivered', 'Not Delivered'],
             ] as const).map(([key, label]) => (
               <button
                 key={key}
@@ -1321,19 +1345,19 @@ export function OrdersTable() {
               variant="outline"
               size="xs"
               onClick={() => {
-                if (ordersPage.isDone) {
+                if (isOrdersPageLoading || isOnLastPage || nextPageCursor === null) {
                   return
                 }
 
                 setRowSelection({})
                 setPageCursors((current) => {
                   const next = current.slice(0, pageIndex + 1)
-                  next[pageIndex + 1] = ordersPage.continueCursor
+                  next[pageIndex + 1] = nextPageCursor
                   return next
                 })
                 setPageIndex((current) => current + 1)
               }}
-              disabled={ordersPage.isDone}
+              disabled={isOrdersPageLoading || isOnLastPage}
             >
               Next
             </Button>

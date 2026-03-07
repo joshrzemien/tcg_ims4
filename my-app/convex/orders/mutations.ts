@@ -127,15 +127,15 @@ async function upsertSingleOrder(ctx: { db: any }, order: any) {
       order: orderRecord,
       shipments: orderShipments,
     })
+    const nextFulfillmentStatus =
+      typeof orderRecord.fulfillmentStatus === 'boolean'
+        ? orderRecord.fulfillmentStatus
+        : existing.fulfillmentStatus ?? false
     const nextOrder = {
       ...orderRecord,
       items: enrichedItems,
       ...shipmentState,
-    }
-
-    // Sync jobs should not clear fulfillment if it was already set internally.
-    if (typeof orderRecord.fulfillmentStatus !== 'boolean') {
-      delete nextOrder.fulfillmentStatus
+      fulfillmentStatus: nextFulfillmentStatus,
     }
 
     await ctx.db.patch('orders', existing._id, nextOrder)
@@ -386,23 +386,20 @@ export const backfillFulfillmentStatuses = mutation({
     let updated = 0
 
     for (const order of orders) {
-      if (order.channel !== 'tcgplayer' && order.channel !== 'manapool') {
-        continue
-      }
-      if (order.fulfillmentStatus === true) {
-        continue
-      }
-
       const derivedShippingStatus = deriveOrderShippingStatus({
         order,
         latestShipment: latestShipmentByOrderId.get(order._id),
       })
-      if (!shouldMarkOrderFulfilled(derivedShippingStatus)) {
+      const nextFulfillmentStatus =
+        order.channel === 'tcgplayer' || order.channel === 'manapool'
+          ? shouldMarkOrderFulfilled(derivedShippingStatus)
+          : order.fulfillmentStatus ?? false
+      if (order.fulfillmentStatus === nextFulfillmentStatus) {
         continue
       }
 
       await ctx.db.patch('orders', order._id, {
-        fulfillmentStatus: true,
+        fulfillmentStatus: nextFulfillmentStatus,
         shippingStatus: normalizeShippingStatus(derivedShippingStatus),
         updatedAt: Date.now(),
       })

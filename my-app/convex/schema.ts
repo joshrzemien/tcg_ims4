@@ -378,5 +378,6 @@ export default defineSchema({
     latestShipment: v.optional(shipmentSummaryValidator),
   })
     .index('by_externalId', ['externalId'])
-    .index('by_createdAt', ['createdAt']),
+    .index('by_createdAt', ['createdAt'])
+    .index('by_fulfillmentStatus_createdAt', ['fulfillmentStatus', 'createdAt']),
 })

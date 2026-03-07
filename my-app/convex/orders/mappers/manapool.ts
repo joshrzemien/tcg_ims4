@@ -118,9 +118,7 @@ export function mapManapoolOrder(order: ManapoolOrderDetail): OrderRecord {
     customerName: order.shipping_address.name,
     status: platformStatus,
     shippingStatus: platformStatus,
-    ...(shouldMarkOrderFulfilled(platformStatus)
-      ? { fulfillmentStatus: true }
-      : {}),
+    fulfillmentStatus: shouldMarkOrderFulfilled(platformStatus),
     shippingMethod: deriveManapoolShippingMethod({
       shippingMethod: order.shipping_method,
       totalAmountCents: order.payment.total_cents,

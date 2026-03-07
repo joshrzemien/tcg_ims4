@@ -45,7 +45,7 @@ export interface OrderRecord {
   customerName: string;
   status: ShippingStatus;
   shippingStatus: ShippingStatus;
-  fulfillmentStatus?: boolean;
+  fulfillmentStatus: boolean;
   shippingMethod: ShippingMethod;
   shippingAddress: OrderAddressRecord;
   totalAmountCents: number;

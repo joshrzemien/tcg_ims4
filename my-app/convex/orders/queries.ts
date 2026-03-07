@@ -1,6 +1,5 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
-import { normalizeShippingStatus } from '../utils/shippingStatus'
 import { query } from '../_generated/server'
 import {
   buildOrderShipmentState,
@@ -14,7 +13,6 @@ const orderListFilterValidator = v.union(
   v.literal('last7'),
   v.literal('last30'),
   v.literal('unfulfilled'),
-  v.literal('not_delivered'),
 )
 
 type OrderListFilter =
@@ -22,7 +20,6 @@ type OrderListFilter =
   | 'last7'
   | 'last30'
   | 'unfulfilled'
-  | 'not_delivered'
 
 type OrderListSource = Pick<
   Doc<'orders'>,
@@ -48,36 +45,17 @@ export type OrderListRow = ReturnType<typeof buildOrderListRow>
 
 function cutoffForFilter(
   filter: OrderListFilter,
-  now: number,
+  cutoffTimestamp: number | undefined,
 ): number | undefined {
   switch (filter) {
     case 'last7':
-      return now - 7 * 24 * 60 * 60 * 1000
     case 'last30':
-      return now - 30 * 24 * 60 * 60 * 1000
+      if (typeof cutoffTimestamp !== 'number' || !Number.isFinite(cutoffTimestamp)) {
+        throw new Error(`cutoffTimestamp is required for ${filter} filters`)
+      }
+      return cutoffTimestamp
     default:
       return undefined
-  }
-}
-
-function matchesOrderFilter(
-  order: Pick<Doc<'orders'>, 'createdAt' | 'fulfillmentStatus' | 'shippingStatus'>,
-  filter: OrderListFilter,
-  now: number,
-) {
-  switch (filter) {
-    case 'all':
-      return true
-    case 'last7':
-      return order.createdAt >= now - 7 * 24 * 60 * 60 * 1000
-    case 'last30':
-      return order.createdAt >= now - 30 * 24 * 60 * 60 * 1000
-    case 'unfulfilled':
-      return order.fulfillmentStatus !== true
-    case 'not_delivered':
-      return normalizeShippingStatus(order.shippingStatus) !== 'delivered'
-    default:
-      return true
   }
 }
 
@@ -101,60 +79,32 @@ function buildOrderListRow(order: OrderListSource, shipmentState: ReturnType<typ
 async function listOrdersByCreatedAt(
   ctx: { db: any },
   filter: OrderListFilter,
+  cutoffTimestamp: number | undefined,
   paginationOpts: {
     numItems: number
     cursor: string | null
   },
 ) {
-  const now = Date.now()
-  const cutoff = cutoffForFilter(filter, now)
-
-  if (filter === 'all' || typeof cutoff === 'number') {
-    const queryHandle =
-      typeof cutoff === 'number'
-        ? ctx.db
-            .query('orders')
-            .withIndex('by_createdAt', (q: any) => q.gte('createdAt', cutoff))
-        : ctx.db.query('orders').withIndex('by_createdAt')
-
-    return await queryHandle.order('desc').paginate(paginationOpts)
-  }
-
-  const page: Array<Doc<'orders'>> = []
-  let cursor = paginationOpts.cursor
-  let isDone = false
-
-  while (page.length < paginationOpts.numItems && !isDone) {
-    const chunk = await ctx.db
+  if (filter === 'unfulfilled') {
+    return await ctx.db
       .query('orders')
-      .withIndex('by_createdAt')
+      .withIndex('by_fulfillmentStatus_createdAt', (q: any) =>
+        q.eq('fulfillmentStatus', false),
+      )
       .order('desc')
-      .paginate({
-        ...paginationOpts,
-        cursor,
-        numItems: Math.max(paginationOpts.numItems * 3, 50),
-      })
-
-    for (const order of chunk.page) {
-      if (!matchesOrderFilter(order, filter, now)) {
-        continue
-      }
-
-      page.push(order)
-      if (page.length >= paginationOpts.numItems) {
-        break
-      }
-    }
-
-    cursor = chunk.continueCursor
-    isDone = chunk.isDone
+      .paginate(paginationOpts)
   }
 
-  return {
-    page,
-    continueCursor: cursor ?? '',
-    isDone,
-  }
+  const cutoff = cutoffForFilter(filter, cutoffTimestamp)
+
+  const queryHandle =
+    typeof cutoff === 'number'
+      ? ctx.db
+          .query('orders')
+          .withIndex('by_createdAt', (q: any) => q.gte('createdAt', cutoff))
+      : ctx.db.query('orders').withIndex('by_createdAt')
+
+  return await queryHandle.order('desc').paginate(paginationOpts)
 }
 
 export const list = query({
@@ -167,10 +117,16 @@ export const list = query({
 export const listPage = query({
   args: {
     filter: orderListFilterValidator,
+    cutoffTimestamp: v.optional(v.number()),
     paginationOpts: paginationOptsValidator,
   },
-  handler: async (ctx, { filter, paginationOpts }) => {
-    const page = await listOrdersByCreatedAt(ctx, filter, paginationOpts)
+  handler: async (ctx, { filter, cutoffTimestamp, paginationOpts }) => {
+    const page = await listOrdersByCreatedAt(
+      ctx,
+      filter,
+      cutoffTimestamp,
+      paginationOpts,
+    )
     const pageRows = await Promise.all(
       page.page.map(async (order: Doc<'orders'>) => {
         if (hasMaterializedOrderShipmentState(order)) {
