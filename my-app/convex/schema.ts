@@ -28,6 +28,17 @@ const catalogSyncStatusValidator = v.union(
   v.literal('error'),
 )
 
+const pricingSyncStatusValidator = v.union(
+  v.literal('idle'),
+  v.literal('syncing'),
+  v.literal('error'),
+)
+
+const setSyncModeValidator = v.union(
+  v.literal('full'),
+  v.literal('pricing_only'),
+)
+
 const pricingTrackingRuleTypeValidator = v.union(
   v.literal('manual_product'),
   v.literal('set'),
@@ -102,6 +113,13 @@ export default defineSchema({
     lastSyncError: v.optional(v.string()),
     nextSyncAttemptAt: v.optional(v.number()),
     consecutiveSyncFailures: v.optional(v.number()),
+    syncedProductCount: v.optional(v.number()),
+    syncedSkuCount: v.optional(v.number()),
+    pricingSyncStatus: v.optional(pricingSyncStatusValidator),
+    currentPricingSyncStartedAt: v.optional(v.number()),
+    lastPricingSyncedAt: v.optional(v.number()),
+    lastPricingSyncError: v.optional(v.string()),
+    pendingSyncMode: v.optional(setSyncModeValidator),
     updatedAt: v.number(),
   })
     .index('by_key', ['key'])
@@ -243,6 +261,7 @@ export default defineSchema({
   })
     .index('by_key', ['key'])
     .index('by_ruleId', ['ruleId'])
+    .index('by_ruleId_active', ['ruleId', 'active'])
     .index('by_seriesKey', ['seriesKey'])
     .index('by_seriesKey_active', ['seriesKey', 'active'])
     .index('by_setKey', ['setKey']),
@@ -268,7 +287,10 @@ export default defineSchema({
     sourceSkuPricingUpdatedAt: v.optional(v.number()),
   })
     .index('by_seriesKey_effectiveAt', ['seriesKey', 'effectiveAt'])
-    .index('by_catalogProductKey_effectiveAt', ['catalogProductKey', 'effectiveAt'])
+    .index('by_catalogProductKey_effectiveAt', [
+      'catalogProductKey',
+      'effectiveAt',
+    ])
     .index('by_setKey_effectiveAt', ['setKey', 'effectiveAt']),
   pricingResolutionIssues: defineTable({
     key: v.string(),
@@ -379,5 +401,8 @@ export default defineSchema({
   })
     .index('by_externalId', ['externalId'])
     .index('by_createdAt', ['createdAt'])
-    .index('by_fulfillmentStatus_createdAt', ['fulfillmentStatus', 'createdAt']),
+    .index('by_fulfillmentStatus_createdAt', [
+      'fulfillmentStatus',
+      'createdAt',
+    ]),
 })

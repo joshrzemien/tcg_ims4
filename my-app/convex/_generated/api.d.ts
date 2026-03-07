@@ -13,6 +13,8 @@ import type * as catalog_mutations from "../catalog/mutations.js";
 import type * as catalog_queries from "../catalog/queries.js";
 import type * as catalog_sources_tcgtracking from "../catalog/sources/tcgtracking.js";
 import type * as catalog_sync from "../catalog/sync.js";
+import type * as catalog_syncModes from "../catalog/syncModes.js";
+import type * as catalog_syncPolicy from "../catalog/syncPolicy.js";
 import type * as catalog_syncState from "../catalog/syncState.js";
 import type * as cron from "../cron.js";
 import type * as orders_actions from "../orders/actions.js";
@@ -51,6 +53,8 @@ declare const fullApi: ApiFromModules<{
   "catalog/queries": typeof catalog_queries;
   "catalog/sources/tcgtracking": typeof catalog_sources_tcgtracking;
   "catalog/sync": typeof catalog_sync;
+  "catalog/syncModes": typeof catalog_syncModes;
+  "catalog/syncPolicy": typeof catalog_syncPolicy;
   "catalog/syncState": typeof catalog_syncState;
   cron: typeof cron;
   "orders/actions": typeof orders_actions;

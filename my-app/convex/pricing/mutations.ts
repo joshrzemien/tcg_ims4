@@ -9,11 +9,22 @@ import {
 } from './normalizers'
 import type { Doc, Id } from '../_generated/dataModel'
 
-const DEACTIVATE_RULE_BATCH_SIZE = 200
-
 type TrackingRuleDoc = Doc<'pricingTrackingRules'>
 type CatalogSetDoc = Doc<'catalogSets'>
 type PricingMutationCtx = any
+
+function categoryRuleAppliesToSet(rule: TrackingRuleDoc, set: CatalogSetDoc) {
+  if (rule.ruleType !== 'category' || rule.categoryKey !== set.categoryKey) {
+    return false
+  }
+
+  const setExistedBeforeRule = set._creationTime < rule.createdAt
+  if (setExistedBeforeRule) {
+    return rule.seedExistingSets !== false
+  }
+
+  return rule.autoTrackFutureSets !== false
+}
 
 async function loadRelevantRulesForSet(
   ctx: PricingMutationCtx,
@@ -42,53 +53,30 @@ async function loadRelevantRulesForSet(
       .collect(),
   ])
 
-  const scopedManualRules = manualRules.filter(
-    (rule: TrackingRuleDoc) =>
-      typeof rule.catalogProductKey === 'string' &&
-      productKeySet.has(rule.catalogProductKey),
+  const applicableCategoryRules = categoryRules.filter(
+    (rule: TrackingRuleDoc) => categoryRuleAppliesToSet(rule, set),
   )
+  const manualRulesByProductKey = new Map<string, Array<TrackingRuleDoc>>()
+
+  for (const rule of manualRules) {
+    if (
+      typeof rule.catalogProductKey !== 'string' ||
+      !productKeySet.has(rule.catalogProductKey)
+    ) {
+      continue
+    }
+
+    const productRules =
+      manualRulesByProductKey.get(rule.catalogProductKey) ?? []
+    productRules.push(rule)
+    manualRulesByProductKey.set(rule.catalogProductKey, productRules)
+  }
 
   return {
     setRules,
-    categoryRules,
-    manualRules: scopedManualRules,
+    categoryRules: applicableCategoryRules,
+    manualRulesByProductKey,
   }
-}
-
-function categoryRuleAppliesToSet(
-  rule: TrackingRuleDoc,
-  set: CatalogSetDoc,
-) {
-  if (rule.ruleType !== 'category' || rule.categoryKey !== set.categoryKey) {
-    return false
-  }
-
-  const setExistedBeforeRule = set._creationTime < rule.createdAt
-  if (setExistedBeforeRule) {
-    return rule.seedExistingSets !== false
-  }
-
-  return rule.autoTrackFutureSets !== false
-}
-
-function ruleAppliesToProduct(
-  rule: TrackingRuleDoc,
-  set: CatalogSetDoc,
-  product: Doc<'catalogProducts'>,
-) {
-  if (!rule.active) {
-    return false
-  }
-
-  if (rule.ruleType === 'manual_product') {
-    return rule.catalogProductKey === product.key
-  }
-
-  if (rule.ruleType === 'set') {
-    return rule.setKey === set.key
-  }
-
-  return categoryRuleAppliesToSet(rule, set)
 }
 
 function buildDefaultRuleLabel(params: {
@@ -106,38 +94,9 @@ function buildDefaultRuleLabel(params: {
   return `Track category ${params.name}`
 }
 
-async function recomputeSeriesActivity(
-  ctx: PricingMutationCtx,
-  seriesKey: string,
-  now: number,
-) {
-  const series = await ctx.db
-    .query('pricingTrackedSeries')
-    .withIndex('by_key', (q: any) => q.eq('key', seriesKey))
-    .unique()
-
-  if (!series) {
-    return
-  }
-
-  const activeJoins = await ctx.db
-    .query('pricingTrackedSeriesRules')
-    .withIndex('by_seriesKey_active', (q: any) =>
-      q.eq('seriesKey', seriesKey).eq('active', true),
-    )
-    .collect()
-
-  await ctx.db.patch('pricingTrackedSeries', series._id, {
-    activeRuleCount: activeJoins.length,
-    active: activeJoins.length > 0,
-    updatedAt: now,
-  })
-}
-
-async function upsertTrackedSeries(
-  ctx: PricingMutationCtx,
-  params: {
-    key: string
+function seriesNeedsPatch(
+  existing: Doc<'pricingTrackedSeries'>,
+  desired: {
     catalogProductKey: string
     categoryKey: string
     setKey: string
@@ -150,222 +109,100 @@ async function upsertTrackedSeries(
     printingKey: string
     printingLabel: string
     skuVariantCode?: string
-    now: number
+    activeRuleCount: number
+    active: boolean
   },
 ) {
-  const existing = await ctx.db
-    .query('pricingTrackedSeries')
-    .withIndex('by_key', (q: any) => q.eq('key', params.key))
-    .unique()
-
-  if (existing) {
-    await ctx.db.patch('pricingTrackedSeries', existing._id, {
-      catalogProductKey: params.catalogProductKey,
-      categoryKey: params.categoryKey,
-      setKey: params.setKey,
-      tcgtrackingCategoryId: params.tcgtrackingCategoryId,
-      tcgtrackingSetId: params.tcgtrackingSetId,
-      tcgplayerProductId: params.tcgplayerProductId,
-      name: params.name,
-      number: params.number,
-      rarity: params.rarity,
-      printingKey: params.printingKey,
-      printingLabel: params.printingLabel,
-      skuVariantCode: params.skuVariantCode,
-      updatedAt: params.now,
-    })
-    return existing
-  }
-
-  const id = await ctx.db.insert('pricingTrackedSeries', {
-    key: params.key,
-    catalogProductKey: params.catalogProductKey,
-    categoryKey: params.categoryKey,
-    setKey: params.setKey,
-    tcgtrackingCategoryId: params.tcgtrackingCategoryId,
-    tcgtrackingSetId: params.tcgtrackingSetId,
-    tcgplayerProductId: params.tcgplayerProductId,
-    name: params.name,
-    number: params.number,
-    rarity: params.rarity,
-    printingKey: params.printingKey,
-    printingLabel: params.printingLabel,
-    skuVariantCode: params.skuVariantCode,
-    pricingSource: 'unavailable',
-    lastResolvedAt: params.now,
-    activeRuleCount: 0,
-    active: false,
-    updatedAt: params.now,
-  })
-
-  return await ctx.db.get('pricingTrackedSeries', id)
+  return (
+    existing.catalogProductKey !== desired.catalogProductKey ||
+    existing.categoryKey !== desired.categoryKey ||
+    existing.setKey !== desired.setKey ||
+    existing.tcgtrackingCategoryId !== desired.tcgtrackingCategoryId ||
+    existing.tcgtrackingSetId !== desired.tcgtrackingSetId ||
+    existing.tcgplayerProductId !== desired.tcgplayerProductId ||
+    existing.name !== desired.name ||
+    existing.number !== desired.number ||
+    existing.rarity !== desired.rarity ||
+    existing.printingKey !== desired.printingKey ||
+    existing.printingLabel !== desired.printingLabel ||
+    existing.skuVariantCode !== desired.skuVariantCode ||
+    existing.activeRuleCount !== desired.activeRuleCount ||
+    existing.active !== desired.active
+  )
 }
 
-async function syncSeriesIssues(
-  ctx: PricingMutationCtx,
-  params: {
-    series: Doc<'pricingTrackedSeries'>
-    issues: Array<{
-      issueType:
-        | 'ambiguous_nm_en_sku'
-        | 'unmapped_printing'
-        | 'missing_product_price'
-        | 'missing_manapool_match'
-      details: Record<string, unknown>
-    }>
-    now: number
+function joinNeedsPatch(
+  existing: Doc<'pricingTrackedSeriesRules'>,
+  desired: {
+    ruleId: Id<'pricingTrackingRules'>
+    seriesKey: string
+    catalogProductKey: string
+    setKey: string
+    categoryKey: string
   },
 ) {
-  const existingIssues = await ctx.db
-    .query('pricingResolutionIssues')
-    .withIndex('by_seriesKey', (q: any) => q.eq('seriesKey', params.series.key))
-    .collect()
-
-  const desiredKeys = new Set<string>()
-
-  for (const issue of params.issues) {
-    const key = buildIssueKey(params.series.key, issue.issueType)
-    desiredKeys.add(key)
-    const existing = existingIssues.find(
-      (entry: Doc<'pricingResolutionIssues'>) => entry.key === key,
-    )
-
-    if (existing) {
-      await ctx.db.patch('pricingResolutionIssues', existing._id, {
-        details: issue.details,
-        lastSeenAt: params.now,
-        occurrenceCount: existing.occurrenceCount + 1,
-        active: true,
-      })
-      continue
-    }
-
-    await ctx.db.insert('pricingResolutionIssues', {
-      key,
-      catalogProductKey: params.series.catalogProductKey,
-      seriesKey: params.series.key,
-      setKey: params.series.setKey,
-      categoryKey: params.series.categoryKey,
-      issueType: issue.issueType,
-      details: issue.details,
-      firstSeenAt: params.now,
-      lastSeenAt: params.now,
-      occurrenceCount: 1,
-      active: true,
-    })
-  }
-
-  for (const existing of existingIssues) {
-    if (!existing.active || desiredKeys.has(existing.key)) {
-      continue
-    }
-
-    await ctx.db.patch('pricingResolutionIssues', existing._id, {
-      active: false,
-      lastSeenAt: params.now,
-    })
-  }
+  return (
+    existing.ruleId !== desired.ruleId ||
+    existing.seriesKey !== desired.seriesKey ||
+    existing.catalogProductKey !== desired.catalogProductKey ||
+    existing.setKey !== desired.setKey ||
+    existing.categoryKey !== desired.categoryKey ||
+    !existing.active
+  )
 }
 
-export const refreshRuleCoverage = internalMutation({
+export const enqueueRuleAffectedSetSyncs = internalMutation({
   args: {
     ruleId: v.id('pricingTrackingRules'),
   },
   handler: async (ctx, { ruleId }) => {
-    const rule = await ctx.db.get('pricingTrackingRules', ruleId)
-    if (!rule || !rule.active) {
-      return { scheduled: 0 }
-    }
+    const [rule, existingJoins] = await Promise.all([
+      ctx.db.get('pricingTrackingRules', ruleId),
+      ctx.db
+        .query('pricingTrackedSeriesRules')
+        .withIndex('by_ruleId', (q: any) => q.eq('ruleId', ruleId))
+        .collect(),
+    ])
 
-    const setKeys = new Set<string>()
+    const setKeys = new Set(existingJoins.map((join) => join.setKey))
 
-    if (rule.ruleType === 'manual_product' && rule.catalogProductKey) {
-      const product = await ctx.db
-        .query('catalogProducts')
-        .withIndex('by_key', (q) => q.eq('key', rule.catalogProductKey!))
-        .unique()
+    if (rule?.active) {
+      if (rule.ruleType === 'manual_product' && rule.catalogProductKey) {
+        const product = await ctx.db
+          .query('catalogProducts')
+          .withIndex('by_key', (q: any) => q.eq('key', rule.catalogProductKey!))
+          .unique()
 
-      if (product) {
-        setKeys.add(product.setKey)
-      }
-    } else if (rule.ruleType === 'set' && rule.setKey) {
-      setKeys.add(rule.setKey)
-    } else if (rule.ruleType === 'category' && rule.categoryKey) {
-      const sets = await ctx.db
-        .query('catalogSets')
-        .withIndex('by_categoryKey', (q) => q.eq('categoryKey', rule.categoryKey!))
-        .collect()
+        if (product) {
+          setKeys.add(product.setKey)
+        }
+      } else if (rule.ruleType === 'set' && rule.setKey) {
+        setKeys.add(rule.setKey)
+      } else if (rule.ruleType === 'category' && rule.categoryKey) {
+        const sets = await ctx.db
+          .query('catalogSets')
+          .withIndex('by_categoryKey', (q: any) =>
+            q.eq('categoryKey', rule.categoryKey!),
+          )
+          .collect()
 
-      for (const set of sets) {
-        if (categoryRuleAppliesToSet(rule, set)) {
-          setKeys.add(set.key)
+        for (const set of sets) {
+          if (categoryRuleAppliesToSet(rule, set)) {
+            setKeys.add(set.key)
+          }
         }
       }
     }
 
-    const syncStartedAt = Date.now()
-
     for (const setKey of setKeys) {
-      await ctx.scheduler.runAfter(0, internal.pricing.sync.processSetAfterCatalogSync, {
+      await ctx.scheduler.runAfter(0, internal.catalog.sync.requestSetSync, {
         setKey,
-        syncStartedAt,
+        mode: 'pricing_only',
+        reason: 'pricing_rule_change',
       })
     }
 
     return { scheduled: setKeys.size }
-  },
-})
-
-export const deactivateRuleCoverageBatch = internalMutation({
-  args: {
-    ruleId: v.id('pricingTrackingRules'),
-    cursor: v.union(v.string(), v.null()),
-  },
-  handler: async (ctx, { ruleId, cursor }) => {
-    const now = Date.now()
-    const page = await ctx.db
-      .query('pricingTrackedSeriesRules')
-      .withIndex('by_ruleId', (q) => q.eq('ruleId', ruleId))
-      .paginate({
-        cursor,
-        numItems: DEACTIVATE_RULE_BATCH_SIZE,
-      })
-
-    const touchedSeriesKeys = new Set<string>()
-
-    for (const join of page.page) {
-      touchedSeriesKeys.add(join.seriesKey)
-
-      if (!join.active) {
-        continue
-      }
-
-      await ctx.db.patch('pricingTrackedSeriesRules', join._id, {
-        active: false,
-        updatedAt: now,
-      })
-    }
-
-    for (const seriesKey of touchedSeriesKeys) {
-      await recomputeSeriesActivity(ctx, seriesKey, now)
-    }
-
-    if (!page.isDone) {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.pricing.mutations.deactivateRuleCoverageBatch,
-        {
-          ruleId,
-          cursor: page.continueCursor,
-        },
-      )
-    }
-
-    return {
-      processed: page.page.length,
-      isDone: page.isDone,
-      continueCursor: page.continueCursor,
-    }
   },
 })
 
@@ -384,14 +221,25 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
       return { setKey, series: 0, joins: 0 }
     }
 
-    const [products, existingJoins] = await Promise.all([
-      ctx.db.query('catalogProducts').withIndex('by_setKey', (q) => q.eq('setKey', setKey)).collect(),
+    const [products, existingSeries, existingJoins] = await Promise.all([
+      ctx.db
+        .query('catalogProducts')
+        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+        .collect(),
+      ctx.db
+        .query('pricingTrackedSeries')
+        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+        .collect(),
       ctx.db
         .query('pricingTrackedSeriesRules')
         .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
         .collect(),
     ])
     const relevantRules = await loadRelevantRulesForSet(ctx, set, products)
+    const sharedRules = [
+      ...relevantRules.setRules,
+      ...relevantRules.categoryRules,
+    ]
 
     const desiredSeries = new Map<
       string,
@@ -424,15 +272,9 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
     >()
 
     for (const product of products) {
-      const productRules = [
-        ...relevantRules.setRules,
-        ...relevantRules.categoryRules.filter((rule: TrackingRuleDoc) =>
-          ruleAppliesToProduct(rule, set, product),
-        ),
-        ...relevantRules.manualRules.filter(
-          (rule: TrackingRuleDoc) => rule.catalogProductKey === product.key,
-        ),
-      ]
+      const manualRules =
+        relevantRules.manualRulesByProductKey.get(product.key) ?? []
+      const productRules = [...sharedRules, ...manualRules]
       if (productRules.length === 0) {
         continue
       }
@@ -470,24 +312,98 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
       }
     }
 
-    const existingJoinsByKey = new Map(existingJoins.map((join) => [join.key, join]))
-    const touchedSeriesKeys = new Set<string>()
+    const desiredJoinCountBySeries = new Map<string, number>()
+    for (const join of desiredJoins.values()) {
+      desiredJoinCountBySeries.set(
+        join.seriesKey,
+        (desiredJoinCountBySeries.get(join.seriesKey) ?? 0) + 1,
+      )
+    }
+
+    const existingSeriesByKey = new Map(
+      existingSeries.map((series) => [series.key, series]),
+    )
+    const existingJoinsByKey = new Map(
+      existingJoins.map((join) => [join.key, join]),
+    )
 
     for (const series of desiredSeries.values()) {
-      await upsertTrackedSeries(ctx, { ...series, now })
-      touchedSeriesKeys.add(series.key)
+      const activeRuleCount = desiredJoinCountBySeries.get(series.key) ?? 0
+      const nextSeries = {
+        ...series,
+        activeRuleCount,
+        active: activeRuleCount > 0,
+      }
+      const existing = existingSeriesByKey.get(series.key)
+
+      if (existing) {
+        if (seriesNeedsPatch(existing, nextSeries)) {
+          await ctx.db.patch('pricingTrackedSeries', existing._id, {
+            catalogProductKey: nextSeries.catalogProductKey,
+            categoryKey: nextSeries.categoryKey,
+            setKey: nextSeries.setKey,
+            tcgtrackingCategoryId: nextSeries.tcgtrackingCategoryId,
+            tcgtrackingSetId: nextSeries.tcgtrackingSetId,
+            tcgplayerProductId: nextSeries.tcgplayerProductId,
+            name: nextSeries.name,
+            number: nextSeries.number,
+            rarity: nextSeries.rarity,
+            printingKey: nextSeries.printingKey,
+            printingLabel: nextSeries.printingLabel,
+            skuVariantCode: nextSeries.skuVariantCode,
+            activeRuleCount: nextSeries.activeRuleCount,
+            active: nextSeries.active,
+            updatedAt: now,
+          })
+        }
+        continue
+      }
+
+      await ctx.db.insert('pricingTrackedSeries', {
+        key: nextSeries.key,
+        catalogProductKey: nextSeries.catalogProductKey,
+        categoryKey: nextSeries.categoryKey,
+        setKey: nextSeries.setKey,
+        tcgtrackingCategoryId: nextSeries.tcgtrackingCategoryId,
+        tcgtrackingSetId: nextSeries.tcgtrackingSetId,
+        tcgplayerProductId: nextSeries.tcgplayerProductId,
+        name: nextSeries.name,
+        number: nextSeries.number,
+        rarity: nextSeries.rarity,
+        printingKey: nextSeries.printingKey,
+        printingLabel: nextSeries.printingLabel,
+        skuVariantCode: nextSeries.skuVariantCode,
+        pricingSource: 'unavailable',
+        lastResolvedAt: now,
+        activeRuleCount: nextSeries.activeRuleCount,
+        active: nextSeries.active,
+        updatedAt: now,
+      })
+    }
+
+    for (const existing of existingSeries) {
+      if (desiredSeries.has(existing.key)) {
+        continue
+      }
+
+      if (!existing.active && existing.activeRuleCount === 0) {
+        continue
+      }
+
+      await ctx.db.patch('pricingTrackedSeries', existing._id, {
+        activeRuleCount: 0,
+        active: false,
+        updatedAt: now,
+      })
     }
 
     for (const join of desiredJoins.values()) {
       const existing = existingJoinsByKey.get(join.key)
+
       if (existing) {
-        touchedSeriesKeys.add(existing.seriesKey)
-        if (
-          !existing.active ||
-          existing.catalogProductKey !== join.catalogProductKey ||
-          existing.categoryKey !== join.categoryKey
-        ) {
+        if (joinNeedsPatch(existing, join)) {
           await ctx.db.patch('pricingTrackedSeriesRules', existing._id, {
+            ruleId: join.ruleId,
             seriesKey: join.seriesKey,
             catalogProductKey: join.catalogProductKey,
             setKey: join.setKey,
@@ -510,23 +426,17 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         createdAt: now,
         updatedAt: now,
       })
-      touchedSeriesKeys.add(join.seriesKey)
     }
 
-    for (const join of existingJoins) {
-      if (desiredJoins.has(join.key) || !join.active) {
+    for (const existing of existingJoins) {
+      if (desiredJoins.has(existing.key) || !existing.active) {
         continue
       }
 
-      await ctx.db.patch('pricingTrackedSeriesRules', join._id, {
+      await ctx.db.patch('pricingTrackedSeriesRules', existing._id, {
         active: false,
         updatedAt: now,
       })
-      touchedSeriesKeys.add(join.seriesKey)
-    }
-
-    for (const seriesKey of touchedSeriesKeys) {
-      await recomputeSeriesActivity(ctx, seriesKey, now)
     }
 
     return {
@@ -543,20 +453,35 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
     capturedAt: v.number(),
   },
   handler: async (ctx, { setKey, capturedAt }) => {
-    const [seriesRows, products, skus] = await Promise.all([
+    const [seriesRows, products, skus, existingIssues] = await Promise.all([
       ctx.db
         .query('pricingTrackedSeries')
-        .withIndex('by_active_setKey', (q) => q.eq('active', true).eq('setKey', setKey))
+        .withIndex('by_active_setKey', (q) =>
+          q.eq('active', true).eq('setKey', setKey),
+        )
         .collect(),
       ctx.db
         .query('catalogProducts')
         .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
         .collect(),
-      ctx.db.query('catalogSkus').withIndex('by_setKey', (q) => q.eq('setKey', setKey)).collect(),
+      ctx.db
+        .query('catalogSkus')
+        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+        .collect(),
+      ctx.db
+        .query('pricingResolutionIssues')
+        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+        .collect(),
     ])
 
-    const productsByKey = new Map(products.map((product) => [product.key, product]))
+    const productsByKey = new Map(
+      products.map((product) => [product.key, product]),
+    )
     const skusByProductKey = new Map<string, Array<Doc<'catalogSkus'>>>()
+    const existingIssuesByKey = new Map(
+      existingIssues.map((issue) => [issue.key, issue]),
+    )
+    const desiredIssueKeys = new Set<string>()
 
     for (const sku of skus) {
       const productSkus = skusByProductKey.get(sku.catalogProductKey) ?? []
@@ -579,11 +504,34 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
         capturedAt,
       })
 
-      await syncSeriesIssues(ctx, {
-        series,
-        issues: snapshot.issues,
-        now: capturedAt,
-      })
+      for (const issue of snapshot.issues) {
+        const key = buildIssueKey(series.key, issue.issueType)
+        const existing = existingIssuesByKey.get(key)
+        desiredIssueKeys.add(key)
+
+        if (existing) {
+          await ctx.db.patch('pricingResolutionIssues', existing._id, {
+            details: issue.details,
+            lastSeenAt: capturedAt,
+            occurrenceCount: existing.occurrenceCount + 1,
+            active: true,
+          })
+        } else {
+          await ctx.db.insert('pricingResolutionIssues', {
+            key,
+            catalogProductKey: series.catalogProductKey,
+            seriesKey: series.key,
+            setKey: series.setKey,
+            categoryKey: series.categoryKey,
+            issueType: issue.issueType,
+            details: issue.details,
+            firstSeenAt: capturedAt,
+            lastSeenAt: capturedAt,
+            occurrenceCount: 1,
+            active: true,
+          })
+        }
+      }
 
       const basePatch = {
         pricingSource: snapshot.pricingSource,
@@ -638,6 +586,17 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
       await ctx.db.patch('pricingTrackedSeries', series._id, basePatch)
     }
 
+    for (const existing of existingIssues) {
+      if (!existing.active || desiredIssueKeys.has(existing.key)) {
+        continue
+      }
+
+      await ctx.db.patch('pricingResolutionIssues', existing._id, {
+        active: false,
+        lastSeenAt: capturedAt,
+      })
+    }
+
     return {
       setKey,
       series: seriesRows.length,
@@ -664,19 +623,25 @@ export const createManualProductRule = mutation({
     const now = Date.now()
     const ruleId = await ctx.db.insert('pricingTrackingRules', {
       ruleType: 'manual_product',
-      label: label?.trim() || buildDefaultRuleLabel({
-        ruleType: 'manual_product',
-        name: product.name,
-      }),
+      label:
+        label?.trim() ||
+        buildDefaultRuleLabel({
+          ruleType: 'manual_product',
+          name: product.name,
+        }),
       active: true,
       catalogProductKey,
       createdAt: now,
       updatedAt: now,
     })
 
-    await ctx.scheduler.runAfter(0, internal.pricing.mutations.refreshRuleCoverage, {
-      ruleId,
-    })
+    await ctx.scheduler.runAfter(
+      0,
+      internal.pricing.mutations.enqueueRuleAffectedSetSyncs,
+      {
+        ruleId,
+      },
+    )
 
     return {
       ruleId,
@@ -703,16 +668,22 @@ export const createSetRule = mutation({
     const now = Date.now()
     const ruleId = await ctx.db.insert('pricingTrackingRules', {
       ruleType: 'set',
-      label: label?.trim() || buildDefaultRuleLabel({ ruleType: 'set', name: set.name }),
+      label:
+        label?.trim() ||
+        buildDefaultRuleLabel({ ruleType: 'set', name: set.name }),
       active: true,
       setKey,
       createdAt: now,
       updatedAt: now,
     })
 
-    await ctx.scheduler.runAfter(0, internal.pricing.mutations.refreshRuleCoverage, {
-      ruleId,
-    })
+    await ctx.scheduler.runAfter(
+      0,
+      internal.pricing.mutations.enqueueRuleAffectedSetSyncs,
+      {
+        ruleId,
+      },
+    )
 
     return {
       ruleId,
@@ -728,7 +699,10 @@ export const createCategoryRule = mutation({
     seedExistingSets: v.optional(v.boolean()),
     autoTrackFutureSets: v.optional(v.boolean()),
   },
-  handler: async (ctx, { categoryKey, label, seedExistingSets, autoTrackFutureSets }) => {
+  handler: async (
+    ctx,
+    { categoryKey, label, seedExistingSets, autoTrackFutureSets },
+  ) => {
     const category = await ctx.db
       .query('catalogCategories')
       .withIndex('by_key', (q) => q.eq('key', categoryKey))
@@ -755,9 +729,13 @@ export const createCategoryRule = mutation({
       updatedAt: now,
     })
 
-    await ctx.scheduler.runAfter(0, internal.pricing.mutations.refreshRuleCoverage, {
-      ruleId,
-    })
+    await ctx.scheduler.runAfter(
+      0,
+      internal.pricing.mutations.enqueueRuleAffectedSetSyncs,
+      {
+        ruleId,
+      },
+    )
 
     return {
       ruleId,
@@ -790,20 +768,13 @@ export const setRuleActive = mutation({
       updatedAt: Date.now(),
     })
 
-    if (active) {
-      await ctx.scheduler.runAfter(0, internal.pricing.mutations.refreshRuleCoverage, {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.pricing.mutations.enqueueRuleAffectedSetSyncs,
+      {
         ruleId,
-      })
-    } else {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.pricing.mutations.deactivateRuleCoverageBatch,
-        {
-          ruleId,
-          cursor: null,
-        },
-      )
-    }
+      },
+    )
 
     return {
       ruleId,
@@ -823,15 +794,14 @@ export const deleteRule = mutation({
       throw new Error(`Pricing rule not found: ${ruleId}`)
     }
 
+    await ctx.db.delete('pricingTrackingRules', ruleId)
     await ctx.scheduler.runAfter(
       0,
-      internal.pricing.mutations.deactivateRuleCoverageBatch,
+      internal.pricing.mutations.enqueueRuleAffectedSetSyncs,
       {
         ruleId,
-        cursor: null,
       },
     )
-    await ctx.db.delete('pricingTrackingRules', ruleId)
 
     return {
       ruleId,

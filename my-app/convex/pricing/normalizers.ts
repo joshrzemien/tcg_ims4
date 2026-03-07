@@ -1,3 +1,4 @@
+import { filterEligibleSkus } from '../catalog/syncPolicy'
 import type { Doc } from '../_generated/dataModel'
 
 export type PricingResolutionIssueType =
@@ -56,9 +57,7 @@ function toOptionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function asRecord(
-  value: unknown,
-): Record<string, unknown> | undefined {
+function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined
   }
@@ -153,7 +152,10 @@ export function getTrackedPrintingDefinitions(
       tcgMarketPriceCents: toOptionalCents(printingValue.market),
       tcgLowPriceCents: toOptionalCents(printingValue.low),
       tcgHighPriceCents: toOptionalCents(printingValue.high),
-      manapoolPriceCents: resolveManapoolPriceCents(manapoolPricing, printingKey),
+      manapoolPriceCents: resolveManapoolPriceCents(
+        manapoolPricing,
+        printingKey,
+      ),
       manapoolQuantity: toOptionalNumber(product.manapoolQuantity),
     })
   }
@@ -172,9 +174,7 @@ export function resolveSeriesSnapshot(params: {
     (entry) => entry.printingKey === series.printingKey,
   )
   const issues: Array<PricingResolutionIssue> = []
-  const nmEnSkus = skus.filter(
-    (sku) => sku.conditionCode === 'NM' && sku.languageCode === 'EN',
-  )
+  const nmEnSkus = filterEligibleSkus(skus)
   const matchingSkus =
     typeof series.skuVariantCode === 'string'
       ? nmEnSkus.filter((sku) => sku.variantCode === series.skuVariantCode)
@@ -197,7 +197,9 @@ export function resolveSeriesSnapshot(params: {
         printingKey: series.printingKey,
         printingLabel: series.printingLabel,
         skuVariantCode: series.skuVariantCode,
-        tcgplayerSkus: matchingSkus.map((sku) => sku.tcgplayerSku).sort((a, b) => a - b),
+        tcgplayerSkus: matchingSkus
+          .map((sku) => sku.tcgplayerSku)
+          .sort((a, b) => a - b),
       },
     })
   }
@@ -239,7 +241,8 @@ export function resolveSeriesSnapshot(params: {
         product.pricingUpdatedAt ??
         capturedAt,
       sourcePricingUpdatedAt: product.pricingUpdatedAt,
-      sourceSkuPricingUpdatedAt: sku.pricingUpdatedAt ?? product.skuPricingUpdatedAt,
+      sourceSkuPricingUpdatedAt:
+        sku.pricingUpdatedAt ?? product.skuPricingUpdatedAt,
       issues,
     }
 

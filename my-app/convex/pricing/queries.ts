@@ -14,6 +14,18 @@ const pricingResolutionIssueTypeValidator = v.union(
   v.literal('missing_manapool_match'),
 )
 
+async function countDocuments(
+  queryHandle: AsyncIterable<unknown>,
+): Promise<number> {
+  let count = 0
+
+  for await (const _document of queryHandle) {
+    count += 1
+  }
+
+  return count
+}
+
 function clampLimit(limit: number | undefined, fallback = 50, max = 200) {
   return Math.max(1, Math.min(limit ?? fallback, max))
 }
@@ -31,7 +43,11 @@ function encodeCursor(offset: number) {
   return String(offset)
 }
 
-function paginateArray<T>(items: Array<T>, cursor: string | null | undefined, limit: number) {
+function paginateArray<T>(
+  items: Array<T>,
+  cursor: string | null | undefined,
+  limit: number,
+) {
   const offset = decodeCursor(cursor)
   const page = items.slice(offset, offset + limit)
   const nextOffset = offset + page.length
@@ -47,7 +63,70 @@ export const listRules = query({
   args: {},
   handler: async (ctx) => {
     const rules = await ctx.db.query('pricingTrackingRules').collect()
-    return rules.sort((left, right) => right.createdAt - left.createdAt)
+    const activeSeriesCounts = new Map<string, number>()
+
+    await Promise.all(
+      rules.map(async (rule) => {
+        const activeSeriesCount = await countDocuments(
+          ctx.db
+            .query('pricingTrackedSeriesRules')
+            .withIndex('by_ruleId_active', (q) =>
+              q.eq('ruleId', rule._id).eq('active', true),
+            ),
+        )
+
+        activeSeriesCounts.set(rule._id, activeSeriesCount)
+      }),
+    )
+
+    return rules
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .map((rule) => ({
+        ...rule,
+        activeSeriesCount: activeSeriesCounts.get(rule._id) ?? 0,
+      }))
+  },
+})
+
+export const getPricingStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const [
+      totalTrackedSeries,
+      totalActiveTrackedSeries,
+      totalRules,
+      totalActiveRules,
+      totalIssues,
+      totalActiveIssues,
+    ] = await Promise.all([
+      countDocuments(ctx.db.query('pricingTrackedSeries')),
+      countDocuments(
+        ctx.db
+          .query('pricingTrackedSeries')
+          .withIndex('by_active', (q) => q.eq('active', true)),
+      ),
+      countDocuments(ctx.db.query('pricingTrackingRules')),
+      countDocuments(
+        ctx.db
+          .query('pricingTrackingRules')
+          .withIndex('by_active', (q) => q.eq('active', true)),
+      ),
+      countDocuments(ctx.db.query('pricingResolutionIssues')),
+      countDocuments(
+        ctx.db
+          .query('pricingResolutionIssues')
+          .withIndex('by_active', (q) => q.eq('active', true)),
+      ),
+    ])
+
+    return {
+      totalTrackedSeries,
+      totalActiveTrackedSeries,
+      totalRules,
+      totalActiveRules,
+      totalIssues,
+      totalActiveIssues,
+    }
   },
 })
 
@@ -63,33 +142,40 @@ export const listTrackedSeries = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const allSeries = args.activeOnly && args.setKey
-      ? await ctx.db
-          .query('pricingTrackedSeries')
-          .withIndex('by_active_setKey', (q) =>
-            q.eq('active', true).eq('setKey', args.setKey!),
-          )
-          .collect()
-      : args.activeOnly
+    const allSeries =
+      args.activeOnly && args.setKey
         ? await ctx.db
             .query('pricingTrackedSeries')
-            .withIndex('by_active', (q) => q.eq('active', true))
+            .withIndex('by_active_setKey', (q) =>
+              q.eq('active', true).eq('setKey', args.setKey!),
+            )
             .collect()
-        : args.setKey
+        : args.activeOnly
           ? await ctx.db
               .query('pricingTrackedSeries')
-              .withIndex('by_setKey', (q) => q.eq('setKey', args.setKey!))
+              .withIndex('by_active', (q) => q.eq('active', true))
               .collect()
-          : args.categoryKey
+          : args.setKey
             ? await ctx.db
                 .query('pricingTrackedSeries')
-                .withIndex('by_categoryKey', (q) => q.eq('categoryKey', args.categoryKey!))
+                .withIndex('by_setKey', (q) => q.eq('setKey', args.setKey!))
                 .collect()
-            : await ctx.db.query('pricingTrackedSeries').collect()
+            : args.categoryKey
+              ? await ctx.db
+                  .query('pricingTrackedSeries')
+                  .withIndex('by_categoryKey', (q) =>
+                    q.eq('categoryKey', args.categoryKey!),
+                  )
+                  .collect()
+              : await ctx.db.query('pricingTrackedSeries').collect()
     const searchValue = args.search?.trim().toLowerCase()
     const filtered = allSeries
       .filter((series) =>
-        args.activeOnly && args.setKey ? true : args.activeOnly ? series.active : true,
+        args.activeOnly && args.setKey
+          ? true
+          : args.activeOnly
+            ? series.active
+            : true,
       )
       .filter((series) =>
         args.categoryKey ? series.categoryKey === args.categoryKey : true,
@@ -129,16 +215,22 @@ export const getSeriesHistory = query({
   },
   handler: async (ctx, { seriesKey, rangeDays }) => {
     const cutoff =
-      typeof rangeDays === 'number' && Number.isFinite(rangeDays) && rangeDays > 0
+      typeof rangeDays === 'number' &&
+      Number.isFinite(rangeDays) &&
+      rangeDays > 0
         ? Date.now() - rangeDays * 24 * 60 * 60 * 1000
         : null
 
     const history = await ctx.db
       .query('pricingHistory')
-      .withIndex('by_seriesKey_effectiveAt', (q) => q.eq('seriesKey', seriesKey))
+      .withIndex('by_seriesKey_effectiveAt', (q) =>
+        q.eq('seriesKey', seriesKey),
+      )
       .collect()
 
-    return history.filter((entry) => (cutoff ? entry.effectiveAt >= cutoff : true))
+    return history.filter((entry) =>
+      cutoff ? entry.effectiveAt >= cutoff : true,
+    )
   },
 })
 
@@ -222,7 +314,9 @@ export const listStaleTrackedSetKeys = internalQuery({
       .withIndex('by_active_setKey', (q) => q.eq('active', true))
       .collect()
 
-    const distinctSetKeys = [...new Set(activeSeries.map((series) => series.setKey))]
+    const distinctSetKeys = [
+      ...new Set(activeSeries.map((series) => series.setKey)),
+    ]
     const staleSets: Array<{
       setKey: string
       lastSyncedAt?: number
