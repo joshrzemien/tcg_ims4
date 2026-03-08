@@ -58,6 +58,16 @@ const orderItemProductTypeValidator = v.union(
   v.literal('mtg_sealed'),
 )
 
+const inventoryTypeValidator = v.union(
+  v.literal('single'),
+  v.literal('sealed'),
+)
+
+const inventoryMetadataFieldValidator = v.object({
+  key: v.string(),
+  value: v.string(),
+})
+
 const setSyncModeValidator = v.union(
   v.literal('full'),
   v.literal('pricing_only'),
@@ -202,6 +212,7 @@ export default defineSchema({
     tcgtrackingCategoryId: v.number(),
     tcgtrackingSetId: v.number(),
     tcgplayerProductId: v.number(),
+    tcgplayerUrl: v.optional(v.string()),
     name: v.string(),
     cleanName: v.string(),
     number: v.optional(v.string()),
@@ -298,6 +309,7 @@ export default defineSchema({
   })
     .index('by_updatedAt', ['updatedAt'])
     .index('by_active', ['active'])
+    .index('by_catalogProductKey', ['catalogProductKey'])
     .index('by_active_updatedAt', ['active', 'updatedAt'])
     .index('by_pricingSource_updatedAt', ['pricingSource', 'updatedAt'])
     .index('by_active_pricingSource_updatedAt', [
@@ -403,6 +415,20 @@ export default defineSchema({
     activeSeriesCount: v.number(),
     updatedAt: v.number(),
   }).index('by_key', ['key']),
+  inventoryItems: defineTable({
+    inventoryType: inventoryTypeValidator,
+    catalogProductKey: v.string(),
+    catalogSkuKey: v.optional(v.string()),
+    quantity: v.number(),
+    location: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    metadataFields: v.optional(v.array(inventoryMetadataFieldValidator)),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_inventoryType_updatedAt', ['inventoryType', 'updatedAt'])
+    .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_catalogSkuKey', ['catalogSkuKey']),
   shipments: defineTable({
     orderId: v.optional(v.id('orders')),
     status: shippingStatusValidator, // Canonical EasyPost-derived order shipping status

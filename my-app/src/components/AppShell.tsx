@@ -1,9 +1,9 @@
 import { Link } from '@tanstack/react-router'
-import { DollarSign, Package, Stamp } from 'lucide-react'
+import { Archive, DollarSign, Package, Stamp } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '~/lib/utils'
 
-type NavKey = 'dashboard' | 'postage' | 'pricing'
+type NavKey = 'dashboard' | 'postage' | 'pricing' | 'inventory'
 
 const navItems: Array<{
   key: NavKey
@@ -13,6 +13,7 @@ const navItems: Array<{
   { key: 'dashboard', href: '/', label: 'Dashboard' },
   { key: 'postage', href: '/postage', label: 'Postage' },
   { key: 'pricing', href: '/pricing', label: 'Pricing' },
+  { key: 'inventory', href: '/inventory', label: 'Inventory' },
 ]
 
 export function AppShell({
@@ -53,6 +54,8 @@ export function AppShell({
                   <Stamp className="size-3.5" />
                 ) : item.key === 'pricing' ? (
                   <DollarSign className="size-3.5" />
+                ) : item.key === 'inventory' ? (
+                  <Archive className="size-3.5" />
                 ) : (
                   <Package className="size-3.5" />
                 )}

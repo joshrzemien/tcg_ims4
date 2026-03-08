@@ -204,6 +204,7 @@ function mapProducts(
       tcgtrackingCategoryId: set.tcgtrackingCategoryId,
       tcgtrackingSetId: set.tcgtrackingSetId,
       tcgplayerProductId: product.id,
+      tcgplayerUrl: normalizeOptionalString(product.tcgplayer_url),
       name: product.name,
       cleanName: product.clean_name,
       number: normalizeOptionalString(product.number),

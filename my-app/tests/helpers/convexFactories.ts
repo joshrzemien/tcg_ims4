@@ -40,6 +40,7 @@ export function buildCatalogProduct(
     tcgtrackingCategoryId: 1,
     tcgtrackingSetId: 100,
     tcgplayerProductId: 1000,
+    tcgplayerUrl: 'https://www.tcgplayer.com/product/1000',
     name: 'Black Lotus',
     cleanName: 'black lotus',
     lastIngestedAt: 1,
@@ -133,6 +134,20 @@ export function buildShipment(
   return createDoc<'shipments'>({
     easypostShipmentId: 'shp_1',
     status: 'created',
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  })
+}
+
+export function buildInventoryItem(
+  overrides: DocOverrides<'inventoryItems'> = {},
+): Doc<'inventoryItems'> {
+  return createDoc<'inventoryItems'>({
+    inventoryType: 'single',
+    catalogProductKey: 'product-1',
+    catalogSkuKey: 'sku-1',
+    quantity: 1,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,

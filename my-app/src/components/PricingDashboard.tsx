@@ -1480,58 +1480,61 @@ function CreateRuleModal({
             <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Category
             </label>
-            {!categories ? (
-              <div className="h-8 animate-pulse rounded border bg-muted/10" />
-            ) : (
-              <>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search categories..."
-                    value={searchText}
-                    onChange={(e) => setSearchText(e.target.value)}
-                    className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
-                  />
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Search categories..."
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+              />
+            </div>
+            <div className="max-h-40 overflow-y-auto rounded border bg-background">
+              {!categories ? (
+                <div className="space-y-px p-1">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="h-8 animate-pulse rounded bg-muted/10"
+                    />
+                  ))}
                 </div>
-                <div className="max-h-40 overflow-y-auto rounded border bg-background">
-                  {categories.length === 0 ? (
-                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-                      {searchText.trim()
-                        ? 'No categories match the current search.'
-                        : 'No categories available.'}
-                    </p>
-                  ) : (
-                    categories.map((cat) => (
-                      <button
-                        key={cat.key}
-                        type="button"
-                        className={cn(
-                          'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
-                          keyValue === cat.key && 'bg-primary/10 text-primary',
-                        )}
-                        onClick={() => {
-                          setKeyValue(cat.key)
-                          if (!label) setLabel(`Track category ${cat.displayName}`)
-                        }}
-                      >
-                        <span className="flex-1 truncate font-medium">
-                          {cat.displayName}
-                        </span>
-                        <span className="shrink-0 text-[10px] text-muted-foreground">
-                          {cat.setCount} sets · {cat.productCount.toLocaleString()} products
-                        </span>
-                      </button>
-                    ))
-                  )}
-                </div>
-                {keyValue && (
-                  <p className="text-[10px] text-muted-foreground">
-                    Selected:{' '}
-                    <span className="font-mono text-foreground">{keyValue}</span>
-                  </p>
-                )}
-              </>
+              ) : categories.length === 0 ? (
+                <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                  {searchText.trim()
+                    ? 'No categories match the current search.'
+                    : 'No categories available.'}
+                </p>
+              ) : (
+                categories.map((cat) => (
+                  <button
+                    key={cat.key}
+                    type="button"
+                    className={cn(
+                      'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
+                      keyValue === cat.key && 'bg-primary/10 text-primary',
+                    )}
+                    onClick={() => {
+                      setKeyValue(cat.key)
+                      if (!label) setLabel(`Track category ${cat.displayName}`)
+                    }}
+                  >
+                    <span className="flex-1 truncate font-medium">
+                      {cat.displayName}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {cat.setCount} sets · {cat.productCount.toLocaleString()} products
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+            {keyValue && (
+              <p className="text-[10px] text-muted-foreground">
+                Selected:{' '}
+                <span className="font-mono text-foreground">{keyValue}</span>
+              </p>
             )}
           </div>
         )}
@@ -1542,86 +1545,90 @@ function CreateRuleModal({
             <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Set
             </label>
-            {!sets ? (
-              <div className="h-8 animate-pulse rounded border bg-muted/10" />
-            ) : (
-              <>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search sets..."
-                    value={searchText}
-                    onChange={(e) => setSearchText(e.target.value)}
-                    className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
-                  />
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Search sets..."
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+              />
+            </div>
+            <div className="max-h-48 overflow-y-auto rounded border bg-background">
+              {!sets ? (
+                <div className="space-y-px p-1">
+                  {Array.from({ length: 5 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="h-8 animate-pulse rounded bg-muted/10"
+                    />
+                  ))}
                 </div>
-                <div className="max-h-48 overflow-y-auto rounded border bg-background">
-                  {sets.length === 0 ? (
-                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-                      {searchText.trim()
-                        ? 'No sets match the current search.'
-                        : 'No sets available.'}
-                    </p>
-                  ) : (
-                    sets.map((set) => (
-                      <button
-                        key={set.key}
-                        type="button"
-                        className={cn(
-                          'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
-                          keyValue === set.key && 'bg-primary/10 text-primary',
-                        )}
-                        onClick={() => {
-                          setKeyValue(set.key)
-                          if (!label) setLabel(`Track set ${set.name}`)
-                        }}
-                      >
-                        <span className="flex-1 truncate font-medium">
-                          {set.label}
-                        </span>
-                        <span className="shrink-0 text-[10px] text-muted-foreground">
-                          {set.productCount.toLocaleString()} products
-                        </span>
-                      </button>
-                    ))
-                  )}
-                </div>
-                {/* Sync status detail for selected set */}
-                {keyValue && (() => {
-                  const selected =
-                    selectedSet ?? sets.find((s) => s.key === keyValue)
-                  if (!selected) return null
-                  return (
-                    <div className="flex items-center gap-2 rounded border border-border/50 bg-muted/5 px-2 py-1.5">
+              ) : sets.length === 0 ? (
+                <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                  {searchText.trim()
+                    ? 'No sets match the current search.'
+                    : 'No sets available.'}
+                </p>
+              ) : (
+                sets.map((set) => (
+                  <button
+                    key={set.key}
+                    type="button"
+                    className={cn(
+                      'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
+                      keyValue === set.key && 'bg-primary/10 text-primary',
+                    )}
+                    onClick={() => {
+                      setKeyValue(set.key)
+                      if (!label) setLabel(`Track set ${set.name}`)
+                    }}
+                  >
+                    <span className="flex-1 truncate font-medium">
+                      {set.label}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {set.productCount.toLocaleString()} products
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+            {/* Sync status detail for selected set */}
+            {keyValue &&
+              (() => {
+                const selected =
+                  selectedSet ?? sets?.find((s) => s.key === keyValue)
+                if (!selected) return null
+                return (
+                  <div className="flex items-center gap-2 rounded border border-border/50 bg-muted/5 px-2 py-1.5">
+                    <Badge
+                      className={
+                        pricingSyncStatusStyles[selected.pricingSyncStatus] ??
+                        pricingSyncStatusStyles.idle
+                      }
+                    >
+                      pricing {humanize(selected.pricingSyncStatus)}
+                    </Badge>
+                    {selected.pendingSyncMode && (
                       <Badge
                         className={
-                          pricingSyncStatusStyles[selected.pricingSyncStatus] ??
-                          pricingSyncStatusStyles.idle
+                          syncModeStyles[selected.pendingSyncMode] ??
+                          'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
                         }
                       >
-                        pricing {humanize(selected.pricingSyncStatus)}
+                        pending {humanize(selected.pendingSyncMode)}
                       </Badge>
-                      {selected.pendingSyncMode && (
-                        <Badge
-                          className={
-                            syncModeStyles[selected.pendingSyncMode] ??
-                            'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                          }
-                        >
-                          pending {humanize(selected.pendingSyncMode)}
-                        </Badge>
-                      )}
-                      <span className="text-[10px] tabular-nums text-muted-foreground">
-                        {selected.syncedProductCount.toLocaleString()} / {selected.productCount.toLocaleString()} products
-                        {' · '}
-                        {selected.syncedSkuCount.toLocaleString()} / {selected.skuCount.toLocaleString()} skus synced
-                      </span>
-                    </div>
-                  )
-                })()}
-              </>
-            )}
+                    )}
+                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                      {selected.syncedProductCount.toLocaleString()} / {selected.productCount.toLocaleString()} products
+                      {' · '}
+                      {selected.syncedSkuCount.toLocaleString()} / {selected.skuCount.toLocaleString()} skus synced
+                    </span>
+                  </div>
+                )
+              })()}
           </div>
         )}
 
