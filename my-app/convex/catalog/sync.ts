@@ -2,15 +2,17 @@ import { v } from 'convex/values'
 import { api, internal } from '../_generated/api'
 import { action, internalAction } from '../_generated/server'
 import { dollarsToCents } from '../orders/mappers/shared'
+import { filterAllowedCatalogCategories } from './config'
+import { filterSetPayloadToSyncScope } from './syncPolicy'
 import {
   fetchCatalogCategories,
   fetchCatalogMeta,
   fetchCatalogSetPayload,
   fetchCatalogSets,
 } from './sources/tcgtracking'
-import { filterAllowedCatalogCategories } from './config'
-import type { ActionCtx } from '../_generated/server'
 import type { Doc } from '../_generated/dataModel'
+import type { ActionCtx } from '../_generated/server'
+import type { SetSyncMode } from './syncModes'
 
 const DEFAULT_SYNC_WINDOW = 5
 const PRODUCT_BATCH_SIZE = 100
@@ -21,9 +23,13 @@ const STUCK_SYNC_THRESHOLD_MS = 30 * 60 * 1000
 
 type SyncSetSuccess = {
   setKey: string
+  requestedMode: SetSyncMode
+  processedMode: SetSyncMode
   productCount: number
   skuCount: number
-  cleanup: { deletedProducts: number; deletedSkus: number }
+  cleanup?: { deletedProducts: number; deletedSkus: number }
+  coverage: { setKey: string; series: number; joins: number }
+  snapshots: { setKey: string; series: number; insertedHistory: number }
   completedAt: number
 }
 
@@ -38,6 +44,13 @@ type CatalogWindowResult = {
   scheduled: number
   metadataRefreshed: boolean
   queuedSetKeys: Array<string>
+}
+
+type RequestSetSyncResult = {
+  setKey: string
+  scheduled: boolean
+  mode: SetSyncMode
+  reason?: string
 }
 
 function chunk<T>(items: Array<T>, size: number): Array<Array<T>> {
@@ -58,13 +71,16 @@ function normalizeOptionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function normalizeOptionalStringArray(value: unknown): Array<string> | undefined {
+function normalizeOptionalStringArray(
+  value: unknown,
+): Array<string> | undefined {
   if (!Array.isArray(value)) {
     return undefined
   }
 
   const items = value.filter(
-    (entry): entry is string => typeof entry === 'string' && entry.trim() !== '',
+    (entry): entry is string =>
+      typeof entry === 'string' && entry.trim() !== '',
   )
 
   return items.length > 0 ? items : undefined
@@ -158,7 +174,9 @@ function mapSet(
     name: set.name,
     abbreviation: normalizeOptionalString(set.abbreviation),
     isSupplemental:
-      typeof set.is_supplemental === 'boolean' ? set.is_supplemental : undefined,
+      typeof set.is_supplemental === 'boolean'
+        ? set.is_supplemental
+        : undefined,
     publishedOn: normalizeOptionalString(set.published_on),
     modifiedOn: normalizeOptionalString(set.modified_on),
     productCount: set.product_count,
@@ -174,8 +192,12 @@ function mapProducts(
   set: Doc<'catalogSets'>,
   payload: Awaited<ReturnType<typeof fetchCatalogSetPayload>>,
 ) {
-  const pricingUpdatedAt = toTimestamp(normalizeOptionalString(payload.pricing.updated))
-  const skuPricingUpdatedAt = toTimestamp(normalizeOptionalString(payload.skus.updated))
+  const pricingUpdatedAt = toTimestamp(
+    normalizeOptionalString(payload.pricing.updated),
+  )
+  const skuPricingUpdatedAt = toTimestamp(
+    normalizeOptionalString(payload.skus.updated),
+  )
   const sourceDataModifiedAt = toTimestamp(
     normalizeOptionalString(payload.detail.data_modified),
   )
@@ -226,10 +248,14 @@ function mapSkus(
   set: Doc<'catalogSets'>,
   payload: Awaited<ReturnType<typeof fetchCatalogSetPayload>>,
 ) {
-  const pricingUpdatedAt = toTimestamp(normalizeOptionalString(payload.skus.updated))
+  const pricingUpdatedAt = toTimestamp(
+    normalizeOptionalString(payload.skus.updated),
+  )
   const skus: Array<Record<string, unknown>> = []
 
-  for (const [productId, productSkus] of Object.entries(payload.skus.products)) {
+  for (const [productId, productSkus] of Object.entries(
+    payload.skus.products,
+  )) {
     const tcgplayerProductId = Number(productId)
     if (!Number.isFinite(tcgplayerProductId)) {
       continue
@@ -286,70 +312,6 @@ async function loadSetByKey(ctx: ActionCtx, setKey: string) {
   return set
 }
 
-async function syncSingleSet(ctx: ActionCtx, setKey: string) {
-  const set = await loadSetByKey(ctx, setKey)
-  const syncStartedAt = Date.now()
-
-  await ctx.runMutation(internal.catalog.mutations.markSetSyncStarted, {
-    setKey,
-    syncStartedAt,
-  })
-
-  try {
-    // TODO: Split static product ingestion from pricing/SKU refreshes. During steady
-    // state, the source changes pricing/SKUs far more often than product metadata, so
-    // re-fetching and re-upserting the full product snapshot on every sync wastes work.
-    const payload = await fetchCatalogSetPayload(
-      set.tcgtrackingCategoryId,
-      set.tcgtrackingSetId,
-    )
-    const products = mapProducts(set, payload)
-    const skus = mapSkus(set, payload)
-
-    for (const batch of chunk(products, PRODUCT_BATCH_SIZE)) {
-      await ctx.runMutation(internal.catalog.mutations.upsertProductsBatch, {
-        products: batch,
-        syncStartedAt,
-      })
-    }
-
-    for (const batch of chunk(skus, SKU_BATCH_SIZE)) {
-      await ctx.runMutation(internal.catalog.mutations.upsertSkusBatch, {
-        skus: batch,
-        syncStartedAt,
-      })
-    }
-
-    const cleanup = await cleanupSetSnapshot(ctx, setKey, syncStartedAt)
-    const completedAt = Date.now()
-
-    await ctx.runMutation(internal.catalog.mutations.markSetSyncCompleted, {
-      setKey,
-      completedAt,
-    })
-    await ctx.scheduler.runAfter(0, internal.pricing.sync.processSetAfterCatalogSync, {
-      setKey,
-      syncStartedAt,
-    })
-
-    return {
-      setKey,
-      productCount: products.length,
-      skuCount: skus.length,
-      cleanup,
-      completedAt,
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    await ctx.runMutation(internal.catalog.mutations.markSetSyncFailed, {
-      setKey,
-      failedAt: Date.now(),
-      message,
-    })
-    throw error
-  }
-}
-
 async function cleanupSetSnapshot(
   ctx: ActionCtx,
   setKey: string,
@@ -361,12 +323,43 @@ async function cleanupSetSnapshot(
   let hasMoreSkus = true
 
   while (hasMoreProducts || hasMoreSkus) {
-    const result = await ctx.runMutation(internal.catalog.mutations.cleanupSetSnapshot, {
-      setKey,
-      syncStartedAt,
-      productLimit: CLEANUP_PRODUCT_BATCH_SIZE,
-      skuLimit: CLEANUP_SKU_BATCH_SIZE,
-    })
+    const result = await ctx.runMutation(
+      internal.catalog.mutations.cleanupSetSnapshot,
+      {
+        setKey,
+        syncStartedAt,
+        productLimit: CLEANUP_PRODUCT_BATCH_SIZE,
+        skuLimit: CLEANUP_SKU_BATCH_SIZE,
+      },
+    )
+
+    deletedProducts += result.deletedProducts
+    deletedSkus += result.deletedSkus
+    hasMoreProducts = result.hasMoreProducts
+    hasMoreSkus = result.hasMoreSkus
+  }
+
+  return {
+    deletedProducts,
+    deletedSkus,
+  }
+}
+
+async function purgeSetSnapshot(ctx: ActionCtx, setKey: string) {
+  let deletedProducts = 0
+  let deletedSkus = 0
+  let hasMoreProducts = true
+  let hasMoreSkus = true
+
+  while (hasMoreProducts || hasMoreSkus) {
+    const result = await ctx.runMutation(
+      internal.catalog.mutations.purgeSetSnapshot,
+      {
+        setKey,
+        productLimit: CLEANUP_PRODUCT_BATCH_SIZE,
+        skuLimit: CLEANUP_SKU_BATCH_SIZE,
+      },
+    )
 
     deletedProducts += result.deletedProducts
     deletedSkus += result.deletedSkus
@@ -399,7 +392,10 @@ async function refreshCatalogMetadata(
     const sets = await fetchCatalogSets(category.id)
     totalSets += sets.length
 
-    for (const batch of chunk(sets.map((set) => mapSet(category, set)), 100)) {
+    for (const batch of chunk(
+      sets.map((set) => mapSet(category, set)),
+      100,
+    )) {
       await ctx.runMutation(internal.catalog.mutations.upsertSetsBatch, {
         sets: batch,
       })
@@ -410,6 +406,222 @@ async function refreshCatalogMetadata(
     categories: categories.length,
     sets: totalSets,
     meta,
+  }
+}
+
+async function requestSetSyncInternal(
+  ctx: ActionCtx,
+  params: {
+    setKey: string
+    mode: SetSyncMode
+    reason?: string
+  },
+): Promise<RequestSetSyncResult> {
+  const request = await ctx.runMutation(
+    internal.catalog.mutations.requestSetSync,
+    params,
+  )
+
+  if (request.scheduled) {
+    await ctx.scheduler.runAfter(0, internal.catalog.sync.processSetSync, {
+      setKey: params.setKey,
+      mode: params.mode,
+      reason: params.reason,
+    })
+  }
+
+  return {
+    setKey: params.setKey,
+    scheduled: request.scheduled,
+    mode: request.mode,
+    reason: params.reason,
+  }
+}
+
+async function processSetSyncInternal(
+  ctx: ActionCtx,
+  params: {
+    setKey: string
+    mode: SetSyncMode
+    reason?: string
+  },
+): Promise<SyncSetSuccess> {
+  const { setKey, mode } = params
+  const set = await loadSetByKey(ctx, setKey)
+  const ruleScope = await ctx.runQuery(
+    internal.pricing.queries.getSetRuleScope,
+    {
+      setKey,
+    },
+  )
+  const setInRuleScope = ruleScope.inRuleScope
+  const processedMode: SetSyncMode =
+    mode === 'pricing_only' && typeof set.lastSyncedAt !== 'number'
+      ? 'full'
+      : mode
+
+  let productCount = 0
+  let skuCount = 0
+  let cleanup: { deletedProducts: number; deletedSkus: number } | undefined
+  let completedAt = Date.now()
+  let coverage = { setKey, series: 0, joins: 0 }
+  let snapshots = { setKey, series: 0, insertedHistory: 0 }
+
+  try {
+    if (processedMode === 'full' && setInRuleScope) {
+      const syncStartedAt = Date.now()
+      await ctx.runMutation(internal.catalog.mutations.markSetSyncStarted, {
+        setKey,
+        syncStartedAt,
+      })
+
+      try {
+        const rawPayload = await fetchCatalogSetPayload(
+          set.tcgtrackingCategoryId,
+          set.tcgtrackingSetId,
+        )
+        const payload = filterSetPayloadToSyncScope(rawPayload)
+        const products = mapProducts(set, payload)
+        const skus = mapSkus(set, payload)
+
+        for (const batch of chunk(products, PRODUCT_BATCH_SIZE)) {
+          await ctx.runMutation(
+            internal.catalog.mutations.upsertProductsBatch,
+            {
+              products: batch,
+              syncStartedAt,
+            },
+          )
+        }
+
+        for (const batch of chunk(skus, SKU_BATCH_SIZE)) {
+          await ctx.runMutation(internal.catalog.mutations.upsertSkusBatch, {
+            skus: batch,
+            syncStartedAt,
+          })
+        }
+
+        cleanup = await cleanupSetSnapshot(ctx, setKey, syncStartedAt)
+        productCount = products.length
+        skuCount = skus.length
+        completedAt = Date.now()
+
+        await ctx.runMutation(internal.catalog.mutations.markSetSyncCompleted, {
+          setKey,
+          completedAt,
+          syncedProductCount: productCount,
+          syncedSkuCount: skuCount,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const failedAt = Date.now()
+        await ctx.runMutation(internal.catalog.mutations.markSetSyncFailed, {
+          setKey,
+          failedAt,
+          message,
+        })
+        await ctx.runMutation(
+          internal.catalog.mutations.markPricingSyncFailed,
+          {
+            setKey,
+            failedAt,
+            message,
+          },
+        )
+        await ctx.runMutation(internal.pricing.mutations.upsertSyncIssue, {
+          setKey,
+          failedAt,
+          message,
+          syncStage: 'catalog',
+        })
+        throw error
+      }
+    }
+
+    const pricingStartedAt = Date.now()
+    await ctx.runMutation(internal.catalog.mutations.markPricingSyncStarted, {
+      setKey,
+      syncStartedAt: pricingStartedAt,
+    })
+
+    try {
+      coverage = await ctx.runMutation(
+        internal.pricing.mutations.refreshTrackedCoverageForSetMutation,
+        { setKey },
+      )
+      snapshots = await ctx.runMutation(
+        internal.pricing.mutations.captureSeriesSnapshotsForSetMutation,
+        {
+          setKey,
+          capturedAt: Date.now(),
+        },
+      )
+      completedAt = Date.now()
+
+      await ctx.runMutation(
+        internal.catalog.mutations.markPricingSyncCompleted,
+        {
+          setKey,
+          completedAt,
+        },
+      )
+      await ctx.runMutation(internal.pricing.mutations.resolveSyncIssue, {
+        setKey,
+        resolvedAt: completedAt,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const failedAt = Date.now()
+      await ctx.runMutation(internal.catalog.mutations.markPricingSyncFailed, {
+        setKey,
+        failedAt,
+        message,
+      })
+      await ctx.runMutation(internal.pricing.mutations.upsertSyncIssue, {
+        setKey,
+        failedAt,
+        message,
+        syncStage: 'pricing',
+      })
+      throw error
+    }
+
+    if (!setInRuleScope) {
+      cleanup = await purgeSetSnapshot(ctx, setKey)
+      productCount = 0
+      skuCount = 0
+      completedAt = Date.now()
+
+      await ctx.runMutation(internal.catalog.mutations.recordSetScopeCleanup, {
+        setKey,
+        cleanedAt: completedAt,
+      })
+    }
+  } finally {
+    const pending = await ctx.runMutation(
+      internal.catalog.mutations.consumePendingSyncMode,
+      { setKey },
+    )
+
+    if (pending.mode) {
+      await ctx.scheduler.runAfter(0, internal.catalog.sync.processSetSync, {
+        setKey,
+        mode: pending.mode,
+        reason: 'pending_follow_up',
+      })
+    }
+  }
+
+  return {
+    setKey,
+    requestedMode: mode,
+    processedMode,
+    productCount,
+    skuCount,
+    cleanup,
+    coverage,
+    snapshots,
+    completedAt,
   }
 }
 
@@ -424,32 +636,63 @@ async function runCatalogWindow(
   })
 
   let metadataRefreshed = false
-  const hasCatalogSets = await ctx.runQuery(api.catalog.queries.hasCatalogSets, {})
+  const hasCatalogSets = await ctx.runQuery(
+    api.catalog.queries.hasCatalogSets,
+    {},
+  )
   if (!hasCatalogSets) {
     await refreshCatalogMetadata(ctx)
     metadataRefreshed = true
   }
 
-  const candidates: Array<{ key: string; syncPriority: number }> = await ctx.runMutation(
-    internal.catalog.mutations.claimSyncCandidates,
-    {
+  const candidates: Array<{ key: string; syncPriority: number }> =
+    await ctx.runQuery(api.catalog.queries.listSyncCandidates, {
       limit: maxSets,
-    },
-  )
+    })
+
+  const queuedSetKeys: Array<string> = []
 
   for (const candidate of candidates) {
-    await ctx.scheduler.runAfter(0, internal.catalog.sync.syncCatalogSet, {
+    const result = await requestSetSyncInternal(ctx, {
       setKey: candidate.key,
+      mode: 'full',
+      reason: 'catalog_window',
     })
+
+    if (result.scheduled) {
+      queuedSetKeys.push(candidate.key)
+    }
   }
 
   return {
     attempted: candidates.length,
-    scheduled: candidates.length,
+    scheduled: queuedSetKeys.length,
     metadataRefreshed,
-    queuedSetKeys: candidates.map((candidate) => candidate.key),
+    queuedSetKeys,
   }
 }
+
+export const requestSetSync = internalAction({
+  args: {
+    setKey: v.string(),
+    mode: v.union(v.literal('full'), v.literal('pricing_only')),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<RequestSetSyncResult> => {
+    return await requestSetSyncInternal(ctx, args)
+  },
+})
+
+export const processSetSync = internalAction({
+  args: {
+    setKey: v.string(),
+    mode: v.union(v.literal('full'), v.literal('pricing_only')),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<SyncSetSuccess> => {
+    return await processSetSyncInternal(ctx, args)
+  },
+})
 
 export const refreshMetadata = internalAction({
   args: {},
@@ -472,7 +715,11 @@ export const syncCatalogSet = internalAction({
     setKey: v.string(),
   },
   handler: async (ctx, { setKey }): Promise<SyncSetSuccess> => {
-    return await syncSingleSet(ctx, setKey)
+    return await processSetSyncInternal(ctx, {
+      setKey,
+      mode: 'full',
+      reason: 'syncCatalogSet',
+    })
   },
 })
 

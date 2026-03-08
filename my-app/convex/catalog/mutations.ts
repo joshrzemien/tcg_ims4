@@ -1,10 +1,18 @@
 import { v } from 'convex/values'
 import { internalMutation } from '../_generated/server'
+import {
+  refreshRuleDashboardFieldsForCategory,
+  refreshRuleDashboardFieldsForProductKeys,
+  refreshRuleDashboardFieldsForSet,
+} from '../pricing/dashboardReadModel'
+import { listRuleScopedSetKeys } from '../pricing/ruleScope'
 import { getAllowedCatalogCategoryIds } from './config'
+import { pickHigherPrioritySyncMode } from './syncModes'
 import {
   compareSyncCandidates,
   getSyncPriority,
   isSyncCandidateEligible,
+  needsRuleScopeCleanup,
 } from './syncState'
 
 const SYNC_RETRY_BACKOFF_MS = [
@@ -15,6 +23,11 @@ const SYNC_RETRY_BACKOFF_MS = [
   3 * 24 * 60 * 60 * 1000,
   7 * 24 * 60 * 60 * 1000,
 ]
+
+const setSyncModeValidator = v.union(
+  v.literal('full'),
+  v.literal('pricing_only'),
+)
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
@@ -85,6 +98,28 @@ function hasSetSourceChanged(
   )
 }
 
+function needsPolicyResync(existing: {
+  syncedProductCount?: number
+  syncedSkuCount?: number
+  pricingSyncStatus?: 'idle' | 'syncing' | 'error'
+}) {
+  return (
+    typeof existing.syncedProductCount !== 'number' ||
+    typeof existing.syncedSkuCount !== 'number' ||
+    typeof existing.pricingSyncStatus !== 'string'
+  )
+}
+
+function isSetProcessing(existing: {
+  syncStatus: 'pending' | 'syncing' | 'ready' | 'error'
+  pricingSyncStatus?: 'idle' | 'syncing' | 'error'
+}) {
+  return (
+    existing.syncStatus === 'syncing' ||
+    existing.pricingSyncStatus === 'syncing'
+  )
+}
+
 export const upsertCategoriesBatch = internalMutation({
   args: {
     categories: v.array(v.any()),
@@ -92,8 +127,10 @@ export const upsertCategoriesBatch = internalMutation({
   handler: async (ctx, { categories }) => {
     let inserted = 0
     let updated = 0
+    const touchedCategoryKeys = new Set<string>()
 
     for (const category of categories) {
+      touchedCategoryKeys.add(category.key)
       const existing = await ctx.db
         .query('catalogCategories')
         .withIndex('by_key', (q) => q.eq('key', category.key))
@@ -116,6 +153,10 @@ export const upsertCategoriesBatch = internalMutation({
       }
     }
 
+    for (const categoryKey of touchedCategoryKeys) {
+      await refreshRuleDashboardFieldsForCategory(ctx, categoryKey)
+    }
+
     return {
       inserted,
       updated,
@@ -130,8 +171,13 @@ export const upsertSetsBatch = internalMutation({
   handler: async (ctx, { sets }) => {
     let inserted = 0
     let updated = 0
+    const touchedSetKeys = new Set<string>()
+    const touchedCategoryKeys = new Set<string>()
+    const touchedProductKeys = new Set<string>()
 
     for (const incoming of sets) {
+      touchedSetKeys.add(incoming.key)
+      touchedCategoryKeys.add(incoming.categoryKey)
       const existing = await ctx.db
         .query('catalogSets')
         .withIndex('by_key', (q) => q.eq('key', incoming.key))
@@ -149,6 +195,7 @@ export const upsertSetsBatch = internalMutation({
 
       if (existing) {
         const shouldResetSyncState =
+          needsPolicyResync(existing) ||
           isStale ||
           (!existing.lastSyncedAt && existing.syncStatus !== 'error') ||
           (existing.syncStatus === 'error' && hasSourceChanged)
@@ -173,7 +220,7 @@ export const upsertSetsBatch = internalMutation({
             ? {}
             : shouldResetSyncState
               ? {
-                  syncStatus: 'pending',
+                  syncStatus: 'pending' as const,
                   nextSyncAttemptAt: undefined,
                   consecutiveSyncFailures: undefined,
                   lastSyncError: undefined,
@@ -182,8 +229,19 @@ export const upsertSetsBatch = internalMutation({
                   syncStatus: existing.syncStatus,
                   nextSyncAttemptAt: existing.nextSyncAttemptAt,
                   consecutiveSyncFailures: existing.consecutiveSyncFailures,
-                  lastSyncError: normalizeOptionalString(existing.lastSyncError),
+                  lastSyncError: normalizeOptionalString(
+                    existing.lastSyncError,
+                  ),
                 }),
+          pricingSyncStatus: existing.pricingSyncStatus ?? 'idle',
+          currentPricingSyncStartedAt: existing.currentPricingSyncStartedAt,
+          lastPricingSyncedAt: existing.lastPricingSyncedAt,
+          lastPricingSyncError: normalizeOptionalString(
+            existing.lastPricingSyncError,
+          ),
+          pendingSyncMode: existing.pendingSyncMode,
+          syncedProductCount: existing.syncedProductCount,
+          syncedSkuCount: existing.syncedSkuCount,
           updatedAt: nextUpdatedAt,
         })
         updated += 1
@@ -191,10 +249,29 @@ export const upsertSetsBatch = internalMutation({
         await ctx.db.insert('catalogSets', {
           ...incoming,
           syncStatus: 'pending',
+          pricingSyncStatus: 'idle',
         })
         inserted += 1
       }
     }
+
+    for (const setKey of touchedSetKeys) {
+      await refreshRuleDashboardFieldsForSet(ctx, setKey)
+      const products = await ctx.db
+        .query('catalogProducts')
+        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+        .collect()
+      for (const product of products) {
+        touchedProductKeys.add(product.key)
+      }
+    }
+    for (const categoryKey of touchedCategoryKeys) {
+      await refreshRuleDashboardFieldsForCategory(ctx, categoryKey)
+    }
+    await refreshRuleDashboardFieldsForProductKeys(
+      ctx,
+      [...touchedProductKeys],
+    )
 
     return {
       inserted,
@@ -232,8 +309,13 @@ export const markSetSyncCompleted = internalMutation({
   args: {
     setKey: v.string(),
     completedAt: v.number(),
+    syncedProductCount: v.number(),
+    syncedSkuCount: v.number(),
   },
-  handler: async (ctx, { setKey, completedAt }) => {
+  handler: async (
+    ctx,
+    { setKey, completedAt, syncedProductCount, syncedSkuCount },
+  ) => {
     const existing = await ctx.db
       .query('catalogSets')
       .withIndex('by_key', (q) => q.eq('key', setKey))
@@ -250,6 +332,8 @@ export const markSetSyncCompleted = internalMutation({
       lastSyncError: undefined,
       nextSyncAttemptAt: undefined,
       consecutiveSyncFailures: undefined,
+      syncedProductCount,
+      syncedSkuCount,
       updatedAt: completedAt,
     })
   },
@@ -284,6 +368,185 @@ export const markSetSyncFailed = internalMutation({
   },
 })
 
+export const markPricingSyncStarted = internalMutation({
+  args: {
+    setKey: v.string(),
+    syncStartedAt: v.number(),
+  },
+  handler: async (ctx, { setKey, syncStartedAt }) => {
+    const existing = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!existing) {
+      throw new Error(`Catalog set not found: ${setKey}`)
+    }
+
+    await ctx.db.patch('catalogSets', existing._id, {
+      pricingSyncStatus: 'syncing',
+      currentPricingSyncStartedAt: syncStartedAt,
+      lastPricingSyncError: undefined,
+      updatedAt: syncStartedAt,
+    })
+  },
+})
+
+export const markPricingSyncCompleted = internalMutation({
+  args: {
+    setKey: v.string(),
+    completedAt: v.number(),
+  },
+  handler: async (ctx, { setKey, completedAt }) => {
+    const existing = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!existing) {
+      throw new Error(`Catalog set not found: ${setKey}`)
+    }
+
+    await ctx.db.patch('catalogSets', existing._id, {
+      pricingSyncStatus: 'idle',
+      currentPricingSyncStartedAt: undefined,
+      lastPricingSyncedAt: completedAt,
+      lastPricingSyncError: undefined,
+      updatedAt: completedAt,
+    })
+  },
+})
+
+export const markPricingSyncFailed = internalMutation({
+  args: {
+    setKey: v.string(),
+    failedAt: v.number(),
+    message: v.string(),
+  },
+  handler: async (ctx, { setKey, failedAt, message }) => {
+    const existing = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!existing) {
+      throw new Error(`Catalog set not found: ${setKey}`)
+    }
+
+    await ctx.db.patch('catalogSets', existing._id, {
+      pricingSyncStatus: 'error',
+      currentPricingSyncStartedAt: undefined,
+      lastPricingSyncError: message,
+      updatedAt: failedAt,
+    })
+  },
+})
+
+export const requestSetSync = internalMutation({
+  args: {
+    setKey: v.string(),
+    mode: setSyncModeValidator,
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, { setKey, mode }) => {
+    const existing = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!existing) {
+      throw new Error(`Catalog set not found: ${setKey}`)
+    }
+
+    const now = Date.now()
+
+    if (isSetProcessing(existing)) {
+      const nextPendingMode = pickHigherPrioritySyncMode(
+        existing.pendingSyncMode,
+        mode,
+      )
+
+      if (nextPendingMode !== existing.pendingSyncMode) {
+        await ctx.db.patch('catalogSets', existing._id, {
+          pendingSyncMode: nextPendingMode,
+          updatedAt: now,
+        })
+      }
+
+      return {
+        scheduled: false,
+        mode: nextPendingMode,
+      }
+    }
+
+    if (mode === 'full') {
+      await ctx.db.patch('catalogSets', existing._id, {
+        syncStatus: 'syncing',
+        currentSyncStartedAt: now,
+        nextSyncAttemptAt: undefined,
+        lastSyncError: undefined,
+        pendingSyncMode: undefined,
+        updatedAt: now,
+      })
+    } else {
+      await ctx.db.patch('catalogSets', existing._id, {
+        pricingSyncStatus: 'syncing',
+        currentPricingSyncStartedAt: now,
+        lastPricingSyncError: undefined,
+        pendingSyncMode: undefined,
+        updatedAt: now,
+      })
+    }
+
+    return {
+      scheduled: true,
+      mode,
+    }
+  },
+})
+
+export const consumePendingSyncMode = internalMutation({
+  args: {
+    setKey: v.string(),
+  },
+  handler: async (ctx, { setKey }) => {
+    const existing = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!existing || !existing.pendingSyncMode || isSetProcessing(existing)) {
+      return {
+        mode: null,
+      }
+    }
+
+    const now = Date.now()
+    const mode = existing.pendingSyncMode
+
+    if (mode === 'full') {
+      await ctx.db.patch('catalogSets', existing._id, {
+        syncStatus: 'syncing',
+        currentSyncStartedAt: now,
+        nextSyncAttemptAt: undefined,
+        lastSyncError: undefined,
+        pendingSyncMode: undefined,
+        updatedAt: now,
+      })
+    } else {
+      await ctx.db.patch('catalogSets', existing._id, {
+        pricingSyncStatus: 'syncing',
+        currentPricingSyncStartedAt: now,
+        lastPricingSyncError: undefined,
+        pendingSyncMode: undefined,
+        updatedAt: now,
+      })
+    }
+
+    return { mode }
+  },
+})
+
 export const upsertProductsBatch = internalMutation({
   args: {
     products: v.array(v.any()),
@@ -292,8 +555,10 @@ export const upsertProductsBatch = internalMutation({
   handler: async (ctx, { products, syncStartedAt }) => {
     let inserted = 0
     let updated = 0
+    const touchedProductKeys = new Set<string>()
 
     for (const incoming of products) {
+      touchedProductKeys.add(incoming.key)
       const existing = await ctx.db
         .query('catalogProducts')
         .withIndex('by_key', (q) => q.eq('key', incoming.key))
@@ -313,6 +578,11 @@ export const upsertProductsBatch = internalMutation({
         inserted += 1
       }
     }
+
+    await refreshRuleDashboardFieldsForProductKeys(
+      ctx,
+      [...touchedProductKeys],
+    )
 
     return {
       inserted,
@@ -407,34 +677,103 @@ export const clearStuckSyncs = internalMutation({
   },
   handler: async (ctx, { thresholdMs }) => {
     const now = Date.now()
-    // TODO: Replace this full catalogSets scan with indexed sync-state lookups once the
-    // catalog shape stabilizes. Running collect() every window does unnecessary work as
-    // the backfill grows.
     const sets = await ctx.db.query('catalogSets').collect()
     let reset = 0
 
     for (const set of sets) {
-      if (set.syncStatus !== 'syncing') {
-        continue
-      }
-
-      if (
+      const catalogStuck =
+        set.syncStatus === 'syncing' &&
         typeof set.currentSyncStartedAt === 'number' &&
-        now - set.currentSyncStartedAt < thresholdMs
-      ) {
+        now - set.currentSyncStartedAt >= thresholdMs
+      const pricingStuck =
+        set.pricingSyncStatus === 'syncing' &&
+        typeof set.currentPricingSyncStartedAt === 'number' &&
+        now - set.currentPricingSyncStartedAt >= thresholdMs
+
+      if (!catalogStuck && !pricingStuck) {
         continue
       }
 
       await ctx.db.patch('catalogSets', set._id, {
         syncStatus: 'pending',
         currentSyncStartedAt: undefined,
+        pricingSyncStatus: 'idle',
+        currentPricingSyncStartedAt: undefined,
         lastSyncError: normalizeOptionalString(set.lastSyncError),
+        lastPricingSyncError: normalizeOptionalString(set.lastPricingSyncError),
         updatedAt: now,
       })
       reset += 1
     }
 
     return { reset }
+  },
+})
+
+export const recordSetScopeCleanup = internalMutation({
+  args: {
+    setKey: v.string(),
+    cleanedAt: v.number(),
+  },
+  handler: async (ctx, { setKey, cleanedAt }) => {
+    const existing = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!existing) {
+      throw new Error(`Catalog set not found: ${setKey}`)
+    }
+
+    await ctx.db.patch('catalogSets', existing._id, {
+      syncStatus: 'ready',
+      currentSyncStartedAt: undefined,
+      lastSyncedAt: undefined,
+      lastSyncError: undefined,
+      nextSyncAttemptAt: undefined,
+      consecutiveSyncFailures: undefined,
+      syncedProductCount: 0,
+      syncedSkuCount: 0,
+      updatedAt: cleanedAt,
+    })
+  },
+})
+
+export const purgeSetSnapshot = internalMutation({
+  args: {
+    setKey: v.string(),
+    productLimit: v.number(),
+    skuLimit: v.number(),
+  },
+  handler: async (ctx, { setKey, productLimit, skuLimit }) => {
+    const products = await ctx.db
+      .query('catalogProducts')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .take(productLimit)
+    const skus = await ctx.db
+      .query('catalogSkus')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .take(skuLimit)
+
+    let deletedProducts = 0
+    let deletedSkus = 0
+
+    for (const product of products) {
+      await ctx.db.delete('catalogProducts', product._id)
+      deletedProducts += 1
+    }
+
+    for (const sku of skus) {
+      await ctx.db.delete('catalogSkus', sku._id)
+      deletedSkus += 1
+    }
+
+    return {
+      deletedProducts,
+      deletedSkus,
+      hasMoreProducts: products.length === productLimit,
+      hasMoreSkus: skus.length === skuLimit,
+    }
   },
 })
 
@@ -446,12 +785,28 @@ export const claimSyncCandidates = internalMutation({
     const maxResults = Math.max(1, Math.min(limit, 100))
     const allowedCategoryIds = getAllowedCatalogCategoryIds()
     const now = Date.now()
-    // TODO: Move candidate selection off a full table scan + in-memory sort. This is
-    // fine for bootstrapping, but it becomes a recurring tax on every sync window.
     const sets = await ctx.db.query('catalogSets').collect()
-    const candidates = sets
+    const ruleScopedSetKeys = await listRuleScopedSetKeys(ctx, { sets })
+    const cleanupCandidates = sets
+      .filter(
+        (set) =>
+          !ruleScopedSetKeys.has(set.key) &&
+          set.syncStatus !== 'syncing' &&
+          set.pricingSyncStatus !== 'syncing' &&
+          needsRuleScopeCleanup(set),
+      )
+      .sort(
+        (left, right) => (right.lastSyncedAt ?? 0) - (left.lastSyncedAt ?? 0),
+      )
+    const inScopeCandidates = sets
+      .filter((set) => ruleScopedSetKeys.has(set.key))
       .filter((set) => isSyncCandidateEligible(set, now, allowedCategoryIds))
       .sort(compareSyncCandidates)
+    const candidates = [...cleanupCandidates, ...inScopeCandidates]
+      .filter(
+        (set, index, all) =>
+          all.findIndex((entry) => entry.key === set.key) === index,
+      )
       .slice(0, maxResults)
 
     for (const candidate of candidates) {

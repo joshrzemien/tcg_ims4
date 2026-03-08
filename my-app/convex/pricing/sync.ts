@@ -17,16 +17,20 @@ type SnapshotResult = {
   insertedHistory: number
 }
 
-type ProcessSetAfterCatalogSyncResult = {
-  setKey: string
-  syncStartedAt: number
-  coverage: CoverageResult
-  snapshots: SnapshotResult
-}
-
 type EnqueueStaleTrackedSetRefreshesResult = {
   scheduled: number
   setKeys: Array<string>
+}
+
+type RequestSetSyncResult = {
+  setKey: string
+  scheduled: boolean
+  mode: 'full' | 'pricing_only'
+  reason?: string
+}
+
+type ProcessSetAfterCatalogSyncResult = RequestSetSyncResult & {
+  syncStartedAt: number
 }
 
 export const refreshTrackedCoverageForSet = internalAction({
@@ -59,24 +63,22 @@ export const processSetAfterCatalogSync = internalAction({
     setKey: v.string(),
     syncStartedAt: v.number(),
   },
-  handler: async (ctx, { setKey, syncStartedAt }): Promise<ProcessSetAfterCatalogSyncResult> => {
-    const coverage: CoverageResult = await ctx.runMutation(
-      internal.pricing.mutations.refreshTrackedCoverageForSetMutation,
-      { setKey },
-    )
-    const snapshots: SnapshotResult = await ctx.runMutation(
-      internal.pricing.mutations.captureSeriesSnapshotsForSetMutation,
+  handler: async (
+    ctx,
+    { setKey, syncStartedAt },
+  ): Promise<ProcessSetAfterCatalogSyncResult> => {
+    const result: RequestSetSyncResult = await ctx.runAction(
+      internal.catalog.sync.requestSetSync,
       {
         setKey,
-        capturedAt: Date.now(),
+        mode: 'pricing_only',
+        reason: 'processSetAfterCatalogSync',
       },
     )
 
     return {
-      setKey,
       syncStartedAt,
-      coverage,
-      snapshots,
+      ...result,
     }
   },
 })
@@ -85,22 +87,36 @@ export const enqueueStaleTrackedSetRefreshes = internalAction({
   args: {
     limit: v.optional(v.number()),
   },
-  handler: async (ctx, { limit }): Promise<EnqueueStaleTrackedSetRefreshesResult> => {
-    const staleSets: Array<{ setKey: string; lastSyncedAt?: number; ageMs: number }> =
-      await ctx.runQuery(internal.pricing.queries.listStaleTrackedSetKeys, {
-        thresholdMs: TRACKED_SET_STALE_THRESHOLD_MS,
-        limit: Math.max(1, Math.min(limit ?? DEFAULT_STALE_REFRESH_LIMIT, 100)),
-      })
+  handler: async (
+    ctx,
+    { limit },
+  ): Promise<EnqueueStaleTrackedSetRefreshesResult> => {
+    const staleSets: Array<{
+      setKey: string
+      lastSyncedAt?: number
+      ageMs: number
+    }> = await ctx.runQuery(internal.pricing.queries.listStaleTrackedSetKeys, {
+      thresholdMs: TRACKED_SET_STALE_THRESHOLD_MS,
+      limit: Math.max(1, Math.min(limit ?? DEFAULT_STALE_REFRESH_LIMIT, 100)),
+    })
+
+    const setKeys: Array<string> = []
 
     for (const staleSet of staleSets) {
-      await ctx.scheduler.runAfter(0, internal.catalog.sync.syncCatalogSet, {
+      const result = await ctx.runAction(internal.catalog.sync.requestSetSync, {
         setKey: staleSet.setKey,
+        mode: 'full',
+        reason: 'pricing_tracked_sets',
       })
+
+      if (result.scheduled) {
+        setKeys.push(staleSet.setKey)
+      }
     }
 
     return {
-      scheduled: staleSets.length,
-      setKeys: staleSets.map((entry: { setKey: string }) => entry.setKey),
+      scheduled: setKeys.length,
+      setKeys,
     }
   },
 })

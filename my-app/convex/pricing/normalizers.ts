@@ -1,3 +1,4 @@
+import { filterEligibleSkus } from '../catalog/syncPolicy'
 import type { Doc } from '../_generated/dataModel'
 
 export type PricingResolutionIssueType =
@@ -41,9 +42,46 @@ export type ResolvedSeriesSnapshot = {
   issues: Array<PricingResolutionIssue>
 }
 
-const SKU_VARIANT_CODE_BY_PRINTING_KEY: Record<string, string> = {
+const DEFAULT_SKU_VARIANT_CODE_BY_PRINTING_KEY: Record<string, string> = {
   normal: 'N',
   foil: 'F',
+}
+
+const SKU_VARIANT_CODE_BY_CATEGORY_ID: Partial<
+  Record<number, Partial<Record<string, string>>>
+> = {
+  3: {
+    normal: 'N',
+    holofoil: 'H',
+    reverse_holofoil: 'RH',
+  },
+  62: {
+    cold_foil: 'CF',
+    rainbow_foil: 'RF',
+  },
+}
+
+const SKU_VARIANT_CODE_BY_SET_ID: Partial<
+  Record<number, Partial<Record<string, string>>>
+> = {
+  1663: {
+    unlimited: 'UL',
+    unlimited_holofoil: 'ULH',
+    '1st_edition': '1E',
+    '1st_edition_holofoil': '1EH',
+  },
+}
+
+function resolveSkuVariantCode(
+  tcgtrackingCategoryId: number,
+  tcgtrackingSetId: number,
+  printingKey: string,
+): string | undefined {
+  return (
+    SKU_VARIANT_CODE_BY_SET_ID[tcgtrackingSetId]?.[printingKey] ??
+    SKU_VARIANT_CODE_BY_CATEGORY_ID[tcgtrackingCategoryId]?.[printingKey] ??
+    DEFAULT_SKU_VARIANT_CODE_BY_PRINTING_KEY[printingKey]
+  )
 }
 
 function toOptionalCents(value: unknown): number | undefined {
@@ -56,9 +94,7 @@ function toOptionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function asRecord(
-  value: unknown,
-): Record<string, unknown> | undefined {
+function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined
   }
@@ -149,11 +185,18 @@ export function getTrackedPrintingDefinitions(
     definitions.set(printingKey, {
       printingKey,
       printingLabel,
-      skuVariantCode: SKU_VARIANT_CODE_BY_PRINTING_KEY[printingKey],
+      skuVariantCode: resolveSkuVariantCode(
+        product.tcgtrackingCategoryId,
+        product.tcgtrackingSetId,
+        printingKey,
+      ),
       tcgMarketPriceCents: toOptionalCents(printingValue.market),
       tcgLowPriceCents: toOptionalCents(printingValue.low),
       tcgHighPriceCents: toOptionalCents(printingValue.high),
-      manapoolPriceCents: resolveManapoolPriceCents(manapoolPricing, printingKey),
+      manapoolPriceCents: resolveManapoolPriceCents(
+        manapoolPricing,
+        printingKey,
+      ),
       manapoolQuantity: toOptionalNumber(product.manapoolQuantity),
     })
   }
@@ -172,9 +215,7 @@ export function resolveSeriesSnapshot(params: {
     (entry) => entry.printingKey === series.printingKey,
   )
   const issues: Array<PricingResolutionIssue> = []
-  const nmEnSkus = skus.filter(
-    (sku) => sku.conditionCode === 'NM' && sku.languageCode === 'EN',
-  )
+  const nmEnSkus = filterEligibleSkus(skus)
   const matchingSkus =
     typeof series.skuVariantCode === 'string'
       ? nmEnSkus.filter((sku) => sku.variantCode === series.skuVariantCode)
@@ -197,7 +238,9 @@ export function resolveSeriesSnapshot(params: {
         printingKey: series.printingKey,
         printingLabel: series.printingLabel,
         skuVariantCode: series.skuVariantCode,
-        tcgplayerSkus: matchingSkus.map((sku) => sku.tcgplayerSku).sort((a, b) => a - b),
+        tcgplayerSkus: matchingSkus
+          .map((sku) => sku.tcgplayerSku)
+          .sort((a, b) => a - b),
       },
     })
   }
@@ -239,7 +282,8 @@ export function resolveSeriesSnapshot(params: {
         product.pricingUpdatedAt ??
         capturedAt,
       sourcePricingUpdatedAt: product.pricingUpdatedAt,
-      sourceSkuPricingUpdatedAt: sku.pricingUpdatedAt ?? product.skuPricingUpdatedAt,
+      sourceSkuPricingUpdatedAt:
+        sku.pricingUpdatedAt ?? product.skuPricingUpdatedAt,
       issues,
     }
 

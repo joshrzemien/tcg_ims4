@@ -30,12 +30,22 @@ export function latestSourceTimestamp(
 }
 
 export function getSyncPriority(set: Doc<'catalogSets'>): number {
+  if (
+    typeof set.syncedProductCount !== 'number' ||
+    typeof set.syncedSkuCount !== 'number'
+  ) {
+    return set.syncStatus === 'error' ? 3 : 0
+  }
+
   if (!set.lastSyncedAt) {
     return set.syncStatus === 'error' ? 3 : 0
   }
 
   const sourceTimestamp = latestSourceTimestamp(set)
-  if (typeof sourceTimestamp === 'number' && sourceTimestamp > set.lastSyncedAt) {
+  if (
+    typeof sourceTimestamp === 'number' &&
+    sourceTimestamp > set.lastSyncedAt
+  ) {
     return 1
   }
 
@@ -44,6 +54,15 @@ export function getSyncPriority(set: Doc<'catalogSets'>): number {
   }
 
   return 2
+}
+
+export function needsRuleScopeCleanup(set: Doc<'catalogSets'>): boolean {
+  return (
+    typeof set.lastSyncedAt === 'number' ||
+    (typeof set.syncedProductCount === 'number' &&
+      set.syncedProductCount > 0) ||
+    (typeof set.syncedSkuCount === 'number' && set.syncedSkuCount > 0)
+  )
 }
 
 export function compareSyncCandidates(
@@ -75,7 +94,7 @@ export function isSyncCandidateEligible(
   now: number,
   allowedCategoryIds: Set<number> | null,
 ) {
-  if (set.syncStatus === 'syncing') {
+  if (set.syncStatus === 'syncing' || set.pricingSyncStatus === 'syncing') {
     return false
   }
 
@@ -88,6 +107,7 @@ export function isSyncCandidateEligible(
   }
 
   return (
-    allowedCategoryIds === null || allowedCategoryIds.has(set.tcgtrackingCategoryId)
+    allowedCategoryIds === null ||
+    allowedCategoryIds.has(set.tcgtrackingCategoryId)
   )
 }
