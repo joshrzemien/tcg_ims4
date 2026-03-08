@@ -104,7 +104,7 @@ export const listSets = query({
         skuCount: set.skuCount,
         publishedOn: set.publishedOn,
         syncStatus: set.syncStatus,
-        pricingSyncStatus: set.pricingSyncStatus ?? 'idle',
+        pricingSyncStatus: set.pricingSyncStatus,
         pendingSyncMode: set.pendingSyncMode,
         syncedProductCount: set.syncedProductCount,
         syncedSkuCount: set.syncedSkuCount,
@@ -216,15 +216,15 @@ export const inspectSetFinishMapping = query({
     const pricingLabelCounts = new Map<string, number>()
     const normalizedPricingKeyCounts = new Map<string, number>()
     const variantCodeCounts = new Map<string, number>()
-    const skuVariantByProductId = new Map<number, Set<string>>()
+    const skuVariantByProductKey = new Map<string, Set<string>>()
 
     for (const sku of skus) {
       incrementCount(variantCodeCounts, sku.variantCode ?? '(missing)')
 
-      let productVariants = skuVariantByProductId.get(sku.tcgplayerProductId)
+      let productVariants = skuVariantByProductKey.get(sku.catalogProductKey)
       if (!productVariants) {
         productVariants = new Set<string>()
-        skuVariantByProductId.set(sku.tcgplayerProductId, productVariants)
+        skuVariantByProductKey.set(sku.catalogProductKey, productVariants)
       }
 
       productVariants.add(sku.variantCode ?? '(missing)')
@@ -232,7 +232,6 @@ export const inspectSetFinishMapping = query({
 
     const productSamples: Array<{
       productKey: string
-      tcgplayerProductId: number
       name: string
       number?: string
       rarity?: string
@@ -263,7 +262,7 @@ export const inspectSetFinishMapping = query({
       }
 
       const skuVariantCodes = [
-        ...(skuVariantByProductId.get(product.tcgplayerProductId) ?? new Set()),
+        ...(skuVariantByProductKey.get(product.key) ?? new Set()),
       ].sort()
 
       if (
@@ -274,7 +273,6 @@ export const inspectSetFinishMapping = query({
       ) {
         productSamples.push({
           productKey: product.key,
-          tcgplayerProductId: product.tcgplayerProductId,
           name: product.name,
           number: product.number,
           rarity: product.rarity,

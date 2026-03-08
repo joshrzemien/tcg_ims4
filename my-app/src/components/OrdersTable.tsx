@@ -55,7 +55,7 @@ type OrderRow = {
   orderNumber: string
   channel: string
   customerName: string
-  fulfillmentStatus?: boolean
+  isFulfilled: boolean
   shippingAddress: Doc<'orders'>['shippingAddress']
   totalAmountCents: number
   itemCount: number
@@ -225,7 +225,7 @@ const columnWidths: Partial<Record<string, string>> = {
   channel: 'w-[5.5rem] min-w-[5.5rem]',
   customerName: 'w-[12rem] min-w-[12rem]',
   shippingStatus: 'w-[9rem] min-w-[9rem]',
-  fulfillmentStatus: 'w-[5rem] min-w-[5rem]',
+  isFulfilled: 'w-[5rem] min-w-[5rem]',
   shippingMethod: 'w-[6rem] min-w-[6rem]',
   itemCount: 'w-[3.5rem] min-w-[3.5rem]',
   totalAmountCents: 'w-[5.5rem] min-w-[5.5rem]',
@@ -928,8 +928,8 @@ export function OrdersTable() {
         )
       },
     }),
-    columnHelper.accessor((row) => row.fulfillmentStatus === true, {
-      id: 'fulfillmentStatus',
+    columnHelper.accessor((row) => row.isFulfilled, {
+      id: 'isFulfilled',
       header: 'Fulfil',
       cell: (info) => (
         <span

@@ -1,12 +1,9 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { query } from '../_generated/server'
-import {
-  buildOrderShipmentState,
-  hasMaterializedOrderShipmentState,
-  readMaterializedOrderShipmentState,
-} from './shipmentSummary'
+import { readMaterializedOrderShipmentState } from './shipmentSummary'
 import type { Doc } from '../_generated/dataModel'
+import type { OrderShipmentState } from './shipmentSummary'
 
 const orderListFilterValidator = v.union(
   v.literal('all'),
@@ -28,7 +25,7 @@ type OrderListSource = Pick<
   | 'orderNumber'
   | 'channel'
   | 'customerName'
-  | 'fulfillmentStatus'
+  | 'isFulfilled'
   | 'shippingStatus'
   | 'shippingAddress'
   | 'totalAmountCents'
@@ -59,14 +56,17 @@ function cutoffForFilter(
   }
 }
 
-function buildOrderListRow(order: OrderListSource, shipmentState: ReturnType<typeof buildOrderShipmentState>) {
+function buildOrderListRow(
+  order: OrderListSource,
+  shipmentState: OrderShipmentState,
+) {
   return {
     _id: order._id,
     externalId: order.externalId,
     orderNumber: order.orderNumber,
     channel: order.channel,
     customerName: order.customerName,
-    fulfillmentStatus: order.fulfillmentStatus,
+    isFulfilled: order.isFulfilled,
     shippingAddress: order.shippingAddress,
     totalAmountCents: order.totalAmountCents,
     itemCount: order.itemCount,
@@ -88,8 +88,8 @@ async function listOrdersByCreatedAt(
   if (filter === 'unfulfilled') {
     return await ctx.db
       .query('orders')
-      .withIndex('by_fulfillmentStatus_createdAt', (q: any) =>
-        q.eq('fulfillmentStatus', false),
+      .withIndex('by_isFulfilled_createdAt', (q: any) =>
+        q.eq('isFulfilled', false),
       )
       .order('desc')
       .paginate(paginationOpts)
@@ -127,22 +127,8 @@ export const listPage = query({
       cutoffTimestamp,
       paginationOpts,
     )
-    const pageRows = await Promise.all(
-      page.page.map(async (order: Doc<'orders'>) => {
-        if (hasMaterializedOrderShipmentState(order)) {
-          return buildOrderListRow(order, readMaterializedOrderShipmentState(order))
-        }
-
-        const shipments = await ctx.db
-          .query('shipments')
-          .withIndex('by_orderId', (q) => q.eq('orderId', order._id))
-          .collect()
-
-        return buildOrderListRow(order, buildOrderShipmentState({
-          order,
-          shipments,
-        }))
-      }),
+    const pageRows = page.page.map((order: Doc<'orders'>) =>
+      buildOrderListRow(order, readMaterializedOrderShipmentState(order)),
     )
 
     return {

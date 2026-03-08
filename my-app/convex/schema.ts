@@ -34,6 +34,30 @@ const pricingSyncStatusValidator = v.union(
   v.literal('error'),
 )
 
+const orderChannelValidator = v.union(
+  v.literal('manapool'),
+  v.literal('tcgplayer'),
+  v.literal('seeded'),
+)
+
+const shippingMethodValidator = v.union(
+  v.literal('Letter'),
+  v.literal('Parcel'),
+)
+
+const shipmentRefundStatusValidator = v.union(
+  v.literal('submitted'),
+  v.literal('refunded'),
+  v.literal('rejected'),
+  v.literal('not_applicable'),
+  v.literal('unknown'),
+)
+
+const orderItemProductTypeValidator = v.union(
+  v.literal('mtg_single'),
+  v.literal('mtg_sealed'),
+)
+
 const setSyncModeValidator = v.union(
   v.literal('full'),
   v.literal('pricing_only'),
@@ -58,13 +82,29 @@ const pricingResolutionIssueTypeValidator = v.union(
   v.literal('missing_manapool_match'),
   v.literal('sync_error'),
 )
+
+const easypostAddressSnapshotValidator = v.object({
+  id: v.optional(v.string()),
+  name: v.optional(v.string()),
+  company: v.optional(v.string()),
+  street1: v.optional(v.string()),
+  street2: v.optional(v.string()),
+  city: v.optional(v.string()),
+  state: v.optional(v.string()),
+  zip: v.optional(v.string()),
+  country: v.optional(v.string()),
+  phone: v.optional(v.string()),
+  email: v.optional(v.string()),
+  residential: v.optional(v.union(v.boolean(), v.string())),
+})
+
 const shipmentSummaryValidator = v.object({
   _id: v.id('shipments'),
   easypostShipmentId: v.string(),
   status: shippingStatusValidator,
   trackingNumber: v.optional(v.string()),
   labelUrl: v.optional(v.string()),
-  refundStatus: v.optional(v.string()),
+  refundStatus: v.optional(shipmentRefundStatusValidator),
   trackingStatus: v.optional(shippingStatusValidator),
   carrier: v.optional(v.string()),
   service: v.optional(v.string()),
@@ -86,21 +126,16 @@ export default defineSchema({
     displayName: v.string(),
     productCount: v.number(),
     setCount: v.number(),
-    apiUrl: v.string(),
     updatedAt: v.number(),
-  })
-    .index('by_key', ['key'])
-    .index('by_tcgtrackingCategoryId', ['tcgtrackingCategoryId']),
+  }).index('by_key', ['key']),
   catalogSets: defineTable({
     key: v.string(),
     categoryKey: v.string(),
     tcgtrackingCategoryId: v.number(),
-    categoryName: v.string(),
     categoryDisplayName: v.string(),
     tcgtrackingSetId: v.number(),
     name: v.string(),
     abbreviation: v.optional(v.string()),
-    isSupplemental: v.optional(v.boolean()),
     publishedOn: v.optional(v.string()),
     modifiedOn: v.optional(v.string()),
     productCount: v.number(),
@@ -114,11 +149,10 @@ export default defineSchema({
     lastSyncError: v.optional(v.string()),
     nextSyncAttemptAt: v.optional(v.number()),
     consecutiveSyncFailures: v.optional(v.number()),
-    syncedProductCount: v.optional(v.number()),
-    syncedSkuCount: v.optional(v.number()),
-    pricingSyncStatus: v.optional(pricingSyncStatusValidator),
+    syncedProductCount: v.number(),
+    syncedSkuCount: v.number(),
+    pricingSyncStatus: pricingSyncStatusValidator,
     currentPricingSyncStartedAt: v.optional(v.number()),
-    lastPricingSyncedAt: v.optional(v.number()),
     lastPricingSyncError: v.optional(v.string()),
     pendingSyncMode: v.optional(setSyncModeValidator),
     updatedAt: v.number(),
@@ -136,24 +170,10 @@ export default defineSchema({
     cleanName: v.string(),
     number: v.optional(v.string()),
     rarity: v.optional(v.string()),
-    imageUrl: v.optional(v.string()),
-    imageCount: v.optional(v.number()),
-    tcgplayerUrl: v.optional(v.string()),
-    manapoolUrl: v.optional(v.string()),
-    scryfallId: v.optional(v.string()),
-    mtgjsonUuid: v.optional(v.string()),
-    cardmarketId: v.optional(v.number()),
-    cardtraderId: v.optional(v.number()),
-    cardtrader: v.optional(v.any()),
-    colors: v.optional(v.array(v.string())),
-    colorIdentity: v.optional(v.array(v.string())),
-    manaValue: v.optional(v.number()),
     finishes: v.optional(v.array(v.string())),
-    borderColor: v.optional(v.string()),
     tcgplayerPricing: v.optional(v.any()),
     manapoolPricing: v.optional(v.any()),
     manapoolQuantity: v.optional(v.number()),
-    sourceDataModifiedAt: v.optional(v.number()),
     pricingUpdatedAt: v.optional(v.number()),
     skuPricingUpdatedAt: v.optional(v.number()),
     lastIngestedAt: v.number(),
@@ -172,9 +192,6 @@ export default defineSchema({
     catalogProductKey: v.string(),
     categoryKey: v.string(),
     setKey: v.string(),
-    tcgtrackingCategoryId: v.number(),
-    tcgtrackingSetId: v.number(),
-    tcgplayerProductId: v.number(),
     tcgplayerSku: v.number(),
     conditionCode: v.optional(v.string()),
     variantCode: v.optional(v.string()),
@@ -189,7 +206,6 @@ export default defineSchema({
   })
     .index('by_key', ['key'])
     .index('by_tcgplayerSku', ['tcgplayerSku'])
-    .index('by_catalogProductKey', ['catalogProductKey'])
     .index('by_setKey', ['setKey'])
     .index('by_setKey_lastIngestedAt', ['setKey', 'lastIngestedAt']),
   pricingTrackingRules: defineTable({
@@ -204,29 +220,23 @@ export default defineSchema({
     categoryGroupLabel: v.optional(v.string()),
     setGroupKey: v.optional(v.string()),
     setGroupLabel: v.optional(v.string()),
-    activeSeriesCount: v.optional(v.number()),
     seedExistingSets: v.optional(v.boolean()),
     autoTrackFutureSets: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index('by_active', ['active'])
-    .index('by_ruleType', ['ruleType'])
     .index('by_ruleType_active', ['ruleType', 'active'])
     .index('by_categoryKey', ['categoryKey'])
     .index('by_active_categoryKey', ['active', 'categoryKey'])
     .index('by_setKey', ['setKey'])
     .index('by_active_setKey', ['active', 'setKey'])
-    .index('by_catalogProductKey', ['catalogProductKey'])
-    .index('by_active_catalogProductKey', ['active', 'catalogProductKey']),
+    .index('by_catalogProductKey', ['catalogProductKey']),
   pricingTrackedSeries: defineTable({
     key: v.string(),
     catalogProductKey: v.string(),
     categoryKey: v.string(),
     setKey: v.string(),
-    tcgtrackingCategoryId: v.number(),
-    tcgtrackingSetId: v.number(),
-    tcgplayerProductId: v.number(),
     name: v.string(),
     number: v.optional(v.string()),
     rarity: v.optional(v.string()),
@@ -249,9 +259,7 @@ export default defineSchema({
     active: v.boolean(),
     updatedAt: v.number(),
   })
-    .index('by_key', ['key'])
     .index('by_active', ['active'])
-    .index('by_catalogProductKey', ['catalogProductKey'])
     .index('by_setKey', ['setKey'])
     .index('by_categoryKey', ['categoryKey'])
     .index('by_active_setKey', ['active', 'setKey']),
@@ -259,27 +267,16 @@ export default defineSchema({
     key: v.string(),
     ruleId: v.id('pricingTrackingRules'),
     seriesKey: v.string(),
-    catalogProductKey: v.string(),
     setKey: v.string(),
-    categoryKey: v.string(),
     active: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index('by_key', ['key'])
     .index('by_ruleId', ['ruleId'])
     .index('by_ruleId_active', ['ruleId', 'active'])
-    .index('by_seriesKey', ['seriesKey'])
-    .index('by_seriesKey_active', ['seriesKey', 'active'])
     .index('by_setKey', ['setKey']),
   pricingHistory: defineTable({
     seriesKey: v.string(),
-    catalogProductKey: v.string(),
-    catalogSkuKey: v.optional(v.string()),
-    setKey: v.string(),
-    categoryKey: v.string(),
-    printingKey: v.string(),
-    printingLabel: v.string(),
     capturedAt: v.number(),
     effectiveAt: v.number(),
     pricingSource: v.union(v.literal('sku'), v.literal('product_fallback')),
@@ -289,16 +286,8 @@ export default defineSchema({
     listingCount: v.optional(v.number()),
     manapoolPriceCents: v.optional(v.number()),
     manapoolQuantity: v.optional(v.number()),
-    snapshotFingerprint: v.string(),
-    sourcePricingUpdatedAt: v.optional(v.number()),
-    sourceSkuPricingUpdatedAt: v.optional(v.number()),
   })
-    .index('by_seriesKey_effectiveAt', ['seriesKey', 'effectiveAt'])
-    .index('by_catalogProductKey_effectiveAt', [
-      'catalogProductKey',
-      'effectiveAt',
-    ])
-    .index('by_setKey_effectiveAt', ['setKey', 'effectiveAt']),
+    .index('by_seriesKey_effectiveAt', ['seriesKey', 'effectiveAt']),
   pricingResolutionIssues: defineTable({
     key: v.string(),
     catalogProductKey: v.string(),
@@ -315,8 +304,7 @@ export default defineSchema({
   })
     .index('by_key', ['key'])
     .index('by_active', ['active'])
-    .index('by_seriesKey', ['seriesKey'])
-    .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_active_setKey', ['active', 'setKey'])
     .index('by_setKey', ['setKey']),
   pricingDashboardStats: defineTable({
     key: v.string(),
@@ -333,16 +321,14 @@ export default defineSchema({
     ruleId: v.id('pricingTrackingRules'),
     activeSeriesCount: v.number(),
     updatedAt: v.number(),
-  })
-    .index('by_key', ['key'])
-    .index('by_ruleId', ['ruleId']),
+  }).index('by_key', ['key']),
   shipments: defineTable({
     orderId: v.optional(v.id('orders')),
     status: shippingStatusValidator, // Canonical EasyPost-derived order shipping status
     easypostShipmentId: v.string(),
     trackingStatus: v.optional(shippingStatusValidator), // Canonical EasyPost tracker status
     // Address verification
-    toAddress: v.optional(v.any()), // EasyPost to_address snapshot
+    toAddress: v.optional(easypostAddressSnapshotValidator), // EasyPost to_address snapshot
     toAddressId: v.optional(v.string()),
     fromAddressId: v.optional(v.string()),
     addressVerified: v.optional(v.boolean()),
@@ -364,11 +350,11 @@ export default defineSchema({
     rateCents: v.optional(v.number()),
     carrier: v.optional(v.string()),
     service: v.optional(v.string()),
-    shippingMethod: v.optional(v.string()), // Canonical internal shipping method: Letter | Parcel
+    shippingMethod: v.optional(shippingMethodValidator), // Canonical internal shipping method: Letter | Parcel
     easypostTrackerId: v.optional(v.string()),
     trackerPublicUrl: v.optional(v.string()),
     // Refund
-    refundStatus: v.optional(v.string()),
+    refundStatus: v.optional(shipmentRefundStatusValidator),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -378,11 +364,11 @@ export default defineSchema({
   orders: defineTable({
     externalId: v.string(), // Manapool UUID
     orderNumber: v.string(), // Manapool UUID (same for now, label is for shipping)
-    channel: v.string(), // "manapool", "tcgplayer", "seeded"
+    channel: orderChannelValidator, // "manapool", "tcgplayer", "seeded"
     customerName: v.string(),
-    shippingStatus: v.optional(shippingStatusValidator), // Canonical shipping lifecycle/platform status
-    fulfillmentStatus: v.optional(v.boolean()), // internal flag set by our workflow
-    shippingMethod: v.string(), // Canonical internal shipping method: Letter | Parcel
+    shippingStatus: shippingStatusValidator, // Canonical shipping lifecycle/platform status
+    isFulfilled: v.boolean(), // internal flag set by our workflow
+    shippingMethod: shippingMethodValidator, // Canonical internal shipping method: Letter | Parcel
     shippingAddress: v.object({
       name: v.string(),
       line1: v.string(),
@@ -403,10 +389,10 @@ export default defineSchema({
         name: v.string(),
         quantity: v.number(),
         productId: v.string(),
-        mtgjsonId: v.string(),
+        mtgjsonId: v.optional(v.string()),
         priceCents: v.number(),
-        productType: v.string(), // mtg_single, mtg_sealed
-        set: v.string(), // set code
+        productType: orderItemProductTypeValidator, // mtg_single, mtg_sealed
+        set: v.optional(v.string()), // set code
         conditionId: v.optional(v.string()), // NM, LP, MP, HP, DMG (singles only)
         finishId: v.optional(v.string()), // NF, FO, EF (singles only)
         languageId: v.string(),
@@ -420,15 +406,15 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     trackingPublicUrl: v.optional(v.string()),
-    shipmentCount: v.optional(v.number()),
-    reviewShipmentCount: v.optional(v.number()),
+    shipmentCount: v.number(),
+    reviewShipmentCount: v.number(),
     activeShipment: v.optional(shipmentSummaryValidator),
     latestShipment: v.optional(shipmentSummaryValidator),
   })
     .index('by_externalId', ['externalId'])
     .index('by_createdAt', ['createdAt'])
-    .index('by_fulfillmentStatus_createdAt', [
-      'fulfillmentStatus',
+    .index('by_isFulfilled_createdAt', [
+      'isFulfilled',
       'createdAt',
     ]),
 })

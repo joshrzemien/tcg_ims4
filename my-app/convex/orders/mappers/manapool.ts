@@ -75,6 +75,9 @@ export function mapManapoolOrder(order: ManapoolOrderDetail): OrderRecord {
   )
   const items = order.items.map((item) => {
     const isSingle = item.product_type === 'mtg_single'
+    const productType: 'mtg_single' | 'mtg_sealed' = isSingle
+      ? 'mtg_single'
+      : 'mtg_sealed'
 
     if (isSingle) {
       const productData = item.product.single
@@ -82,10 +85,10 @@ export function mapManapoolOrder(order: ManapoolOrderDetail): OrderRecord {
         name: productData?.name ?? 'Unknown',
         quantity: item.quantity,
         priceCents: item.price_cents,
-        productType: item.product_type,
+        productType,
         productId: item.product_id,
-        mtgjsonId: productData?.mtgjson_id ?? '',
-        set: productData?.set ?? '',
+        ...(productData?.mtgjson_id ? { mtgjsonId: productData.mtgjson_id } : {}),
+        ...(productData?.set ? { set: productData.set } : {}),
         languageId: productData?.language_id ?? 'EN',
         ...(productData && {
           conditionId: productData.condition_id,
@@ -102,10 +105,10 @@ export function mapManapoolOrder(order: ManapoolOrderDetail): OrderRecord {
       name: productData?.name ?? 'Unknown',
       quantity: item.quantity,
       priceCents: item.price_cents,
-      productType: item.product_type,
+      productType,
       productId: item.product_id,
-      mtgjsonId: productData?.mtgjson_id ?? '',
-      set: productData?.set ?? '',
+      ...(productData?.mtgjson_id ? { mtgjsonId: productData.mtgjson_id } : {}),
+      ...(productData?.set ? { set: productData.set } : {}),
       languageId: productData?.language_id ?? 'EN',
       ...(item.tcgsku != null && { tcgplayerSku: item.tcgsku }),
     }
@@ -118,7 +121,7 @@ export function mapManapoolOrder(order: ManapoolOrderDetail): OrderRecord {
     customerName: order.shipping_address.name,
     status: platformStatus,
     shippingStatus: platformStatus,
-    fulfillmentStatus: shouldMarkOrderFulfilled(platformStatus),
+    isFulfilled: shouldMarkOrderFulfilled(platformStatus),
     shippingMethod: deriveManapoolShippingMethod({
       shippingMethod: order.shipping_method,
       totalAmountCents: order.payment.total_cents,

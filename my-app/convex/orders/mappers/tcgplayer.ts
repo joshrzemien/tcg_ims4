@@ -53,10 +53,8 @@ export function mapTcgplayerOrder(order: TcgplayerOrderDetail): OrderRecord {
     name: item.name ?? 'Unknown',
     quantity: item.quantity ?? 1,
     priceCents: dollarsToCents(item.unitPrice),
-    productType: 'mtg_single',
+    productType: 'mtg_single' as const,
     productId: String(item.productId ?? ''),
-    mtgjsonId: '',
-    set: '',
     languageId: 'EN',
     ...(item.skuId != null && { tcgplayerSku: Number(item.skuId) }),
   }))
@@ -68,7 +66,7 @@ export function mapTcgplayerOrder(order: TcgplayerOrderDetail): OrderRecord {
     customerName: order.buyerName ?? 'Unknown',
     status: platformStatus,
     shippingStatus: platformStatus,
-    fulfillmentStatus: shouldMarkOrderFulfilled(platformStatus),
+    isFulfilled: shouldMarkOrderFulfilled(platformStatus),
     shippingMethod: deriveTcgplayerShippingMethod({
       shippingType: order.shippingType,
       totalAmountCents,

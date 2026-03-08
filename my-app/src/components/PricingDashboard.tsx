@@ -41,8 +41,8 @@ type CatalogSetSync = {
   pendingSetCount?: number
   syncingSetCount?: number
   errorSetCount?: number
-  syncedProductCount?: number
-  syncedSkuCount?: number
+  syncedProductCount: number
+  syncedSkuCount: number
 }
 
 type TrackingRule = {
@@ -417,8 +417,8 @@ function RuleRow({
             </div>
             <span className="text-[10px] tabular-nums text-muted-foreground">
               {rule.ruleType === 'category'
-                ? `${rule.catalogSetSync.scopedSetCount?.toLocaleString() ?? 0} sets · ${rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products · ${rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus`
-                : `${rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products · ${rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus`}
+                ? `${rule.catalogSetSync.scopedSetCount?.toLocaleString() ?? 0} sets · ${rule.catalogSetSync.syncedProductCount.toLocaleString()} products · ${rule.catalogSetSync.syncedSkuCount.toLocaleString()} skus`
+                : `${rule.catalogSetSync.syncedProductCount.toLocaleString()} products · ${rule.catalogSetSync.syncedSkuCount.toLocaleString()} skus`}
             </span>
           </div>
         ) : (
@@ -1614,9 +1614,9 @@ function CreateRuleModal({
                         </Badge>
                       )}
                       <span className="text-[10px] tabular-nums text-muted-foreground">
-                        {selected.syncedProductCount?.toLocaleString() ?? 0} / {selected.productCount.toLocaleString()} products
+                        {selected.syncedProductCount.toLocaleString()} / {selected.productCount.toLocaleString()} products
                         {' · '}
-                        {selected.syncedSkuCount?.toLocaleString() ?? 0} / {selected.skuCount.toLocaleString()} skus synced
+                        {selected.syncedSkuCount.toLocaleString()} / {selected.skuCount.toLocaleString()} skus synced
                       </span>
                     </div>
                   )

@@ -127,15 +127,15 @@ async function upsertSingleOrder(ctx: { db: any }, order: any) {
       order: orderRecord,
       shipments: orderShipments,
     })
-    const nextFulfillmentStatus =
-      typeof orderRecord.fulfillmentStatus === 'boolean'
-        ? orderRecord.fulfillmentStatus
-        : existing.fulfillmentStatus ?? false
+    const nextIsFulfilled =
+      typeof orderRecord.isFulfilled === 'boolean'
+        ? orderRecord.isFulfilled
+        : existing.isFulfilled
     const nextOrder = {
       ...orderRecord,
       items: enrichedItems,
       ...shipmentState,
-      fulfillmentStatus: nextFulfillmentStatus,
+      isFulfilled: nextIsFulfilled,
     }
 
     await ctx.db.patch('orders', existing._id, nextOrder)
@@ -148,9 +148,9 @@ async function upsertSingleOrder(ctx: { db: any }, order: any) {
       ...orderRecord,
       items: enrichedItems,
       ...shipmentState,
-      fulfillmentStatus:
-        typeof orderRecord.fulfillmentStatus === 'boolean'
-          ? orderRecord.fulfillmentStatus
+      isFulfilled:
+        typeof orderRecord.isFulfilled === 'boolean'
+          ? orderRecord.isFulfilled
           : false,
     }
     await ctx.db.insert('orders', nextOrder)
@@ -315,7 +315,7 @@ export const setFulfillmentStatus = mutation({
     }
 
     await ctx.db.patch('orders', orderId, {
-      fulfillmentStatus: fulfilled,
+      isFulfilled: fulfilled,
       shippingStatus: normalizeShippingStatus(order.shippingStatus),
       updatedAt: Date.now(),
     })
@@ -390,16 +390,16 @@ export const backfillFulfillmentStatuses = mutation({
         order,
         latestShipment: latestShipmentByOrderId.get(order._id),
       })
-      const nextFulfillmentStatus =
+      const nextIsFulfilled =
         order.channel === 'tcgplayer' || order.channel === 'manapool'
           ? shouldMarkOrderFulfilled(derivedShippingStatus)
-          : order.fulfillmentStatus ?? false
-      if (order.fulfillmentStatus === nextFulfillmentStatus) {
+          : order.isFulfilled
+      if (order.isFulfilled === nextIsFulfilled) {
         continue
       }
 
       await ctx.db.patch('orders', order._id, {
-        fulfillmentStatus: nextFulfillmentStatus,
+        isFulfilled: nextIsFulfilled,
         shippingStatus: normalizeShippingStatus(derivedShippingStatus),
         updatedAt: Date.now(),
       })

@@ -134,7 +134,6 @@ function mapCategory(category: {
   display_name: string
   product_count: number
   set_count: number
-  api_url: string
 }) {
   return {
     key: buildCategoryKey(category.id),
@@ -143,18 +142,16 @@ function mapCategory(category: {
     displayName: category.display_name,
     productCount: category.product_count,
     setCount: category.set_count,
-    apiUrl: category.api_url,
     updatedAt: Date.now(),
   }
 }
 
 function mapSet(
-  category: { id: number; name: string; display_name: string },
+  category: { id: number; display_name: string },
   set: {
     id: number
     name: string
     abbreviation?: string | null
-    is_supplemental?: boolean | null
     published_on?: string | null
     modified_on?: string | null
     product_count: number
@@ -168,15 +165,10 @@ function mapSet(
     key: buildSetKey(category.id, set.id),
     categoryKey: buildCategoryKey(category.id),
     tcgtrackingCategoryId: category.id,
-    categoryName: category.name,
     categoryDisplayName: category.display_name,
     tcgtrackingSetId: set.id,
     name: set.name,
     abbreviation: normalizeOptionalString(set.abbreviation),
-    isSupplemental:
-      typeof set.is_supplemental === 'boolean'
-        ? set.is_supplemental
-        : undefined,
     publishedOn: normalizeOptionalString(set.published_on),
     modifiedOn: normalizeOptionalString(set.modified_on),
     productCount: set.product_count,
@@ -198,10 +190,6 @@ function mapProducts(
   const skuPricingUpdatedAt = toTimestamp(
     normalizeOptionalString(payload.skus.updated),
   )
-  const sourceDataModifiedAt = toTimestamp(
-    normalizeOptionalString(payload.detail.data_modified),
-  )
-
   return payload.detail.products.map((product) => {
     const productPricing = payload.pricing.prices[String(product.id)] ?? {}
 
@@ -220,24 +208,10 @@ function mapProducts(
       cleanName: product.clean_name,
       number: normalizeOptionalString(product.number),
       rarity: normalizeOptionalString(product.rarity),
-      imageUrl: normalizeOptionalString(product.image_url),
-      imageCount: normalizeOptionalNumber(product.image_count),
-      tcgplayerUrl: normalizeOptionalString(product.tcgplayer_url),
-      manapoolUrl: normalizeOptionalString(product.manapool_url),
-      scryfallId: normalizeOptionalString(product.scryfall_id),
-      mtgjsonUuid: normalizeOptionalString(product.mtgjson_uuid),
-      cardmarketId: normalizeOptionalNumber(product.cardmarket_id),
-      cardtraderId: normalizeOptionalNumber(product.cardtrader_id),
-      cardtrader: product.cardtrader ?? undefined,
-      colors: normalizeOptionalStringArray(product.colors),
-      colorIdentity: normalizeOptionalStringArray(product.color_identity),
-      manaValue: normalizeOptionalNumber(product.mana_value),
       finishes: normalizeOptionalStringArray(product.finishes),
-      borderColor: normalizeOptionalString(product.border_color),
       tcgplayerPricing: normalizeOptionalRecord(productPricing.tcg),
       manapoolPricing: normalizeOptionalRecord(productPricing.manapool),
       manapoolQuantity: normalizeOptionalNumber(productPricing.mp_qty),
-      sourceDataModifiedAt,
       pricingUpdatedAt,
       skuPricingUpdatedAt,
     }
@@ -281,9 +255,6 @@ function mapSkus(
         ),
         categoryKey: set.categoryKey,
         setKey: set.key,
-        tcgtrackingCategoryId: set.tcgtrackingCategoryId,
-        tcgtrackingSetId: set.tcgtrackingSetId,
-        tcgplayerProductId,
         tcgplayerSku,
         conditionCode: normalizeOptionalString(sku.cnd),
         variantCode: normalizeOptionalString(sku.var),

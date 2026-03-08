@@ -123,9 +123,6 @@ function seriesNeedsPatch(
     catalogProductKey: string
     categoryKey: string
     setKey: string
-    tcgtrackingCategoryId: number
-    tcgtrackingSetId: number
-    tcgplayerProductId: number
     name: string
     number?: string
     rarity?: string
@@ -140,9 +137,6 @@ function seriesNeedsPatch(
     existing.catalogProductKey !== desired.catalogProductKey ||
     existing.categoryKey !== desired.categoryKey ||
     existing.setKey !== desired.setKey ||
-    existing.tcgtrackingCategoryId !== desired.tcgtrackingCategoryId ||
-    existing.tcgtrackingSetId !== desired.tcgtrackingSetId ||
-    existing.tcgplayerProductId !== desired.tcgplayerProductId ||
     existing.name !== desired.name ||
     existing.number !== desired.number ||
     existing.rarity !== desired.rarity ||
@@ -154,22 +148,45 @@ function seriesNeedsPatch(
   )
 }
 
+function seriesSnapshotNeedsPatch(
+  existing: Doc<'pricingTrackedSeries'>,
+  desired: {
+    pricingSource: Doc<'pricingTrackedSeries'>['pricingSource']
+    preferredCatalogSkuKey?: string
+    preferredTcgplayerSku?: number
+    currentTcgMarketPriceCents?: number
+    currentTcgLowPriceCents?: number
+    currentTcgHighPriceCents?: number
+    currentListingCount?: number
+    currentManapoolPriceCents?: number
+    currentManapoolQuantity?: number
+  },
+) {
+  return (
+    existing.pricingSource !== desired.pricingSource ||
+    existing.preferredCatalogSkuKey !== desired.preferredCatalogSkuKey ||
+    existing.preferredTcgplayerSku !== desired.preferredTcgplayerSku ||
+    existing.currentTcgMarketPriceCents !== desired.currentTcgMarketPriceCents ||
+    existing.currentTcgLowPriceCents !== desired.currentTcgLowPriceCents ||
+    existing.currentTcgHighPriceCents !== desired.currentTcgHighPriceCents ||
+    existing.currentListingCount !== desired.currentListingCount ||
+    existing.currentManapoolPriceCents !== desired.currentManapoolPriceCents ||
+    existing.currentManapoolQuantity !== desired.currentManapoolQuantity
+  )
+}
+
 function joinNeedsPatch(
   existing: Doc<'pricingTrackedSeriesRules'>,
   desired: {
     ruleId: Id<'pricingTrackingRules'>
     seriesKey: string
-    catalogProductKey: string
     setKey: string
-    categoryKey: string
   },
 ) {
   return (
     existing.ruleId !== desired.ruleId ||
     existing.seriesKey !== desired.seriesKey ||
-    existing.catalogProductKey !== desired.catalogProductKey ||
     existing.setKey !== desired.setKey ||
-    existing.categoryKey !== desired.categoryKey ||
     !existing.active
   )
 }
@@ -271,9 +288,6 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         catalogProductKey: string
         categoryKey: string
         setKey: string
-        tcgtrackingCategoryId: number
-        tcgtrackingSetId: number
-        tcgplayerProductId: number
         name: string
         number?: string
         rarity?: string
@@ -288,9 +302,7 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         key: string
         ruleId: Id<'pricingTrackingRules'>
         seriesKey: string
-        catalogProductKey: string
         setKey: string
-        categoryKey: string
       }
     >()
 
@@ -310,9 +322,6 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
           catalogProductKey: product.key,
           categoryKey: product.categoryKey,
           setKey: product.setKey,
-          tcgtrackingCategoryId: product.tcgtrackingCategoryId,
-          tcgtrackingSetId: product.tcgtrackingSetId,
-          tcgplayerProductId: product.tcgplayerProductId,
           name: product.name,
           number: product.number,
           rarity: product.rarity,
@@ -327,9 +336,7 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
             key: joinKey,
             ruleId: rule._id,
             seriesKey,
-            catalogProductKey: product.key,
             setKey: product.setKey,
-            categoryKey: product.categoryKey,
           })
         }
       }
@@ -385,9 +392,6 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
             catalogProductKey: nextSeries.catalogProductKey,
             categoryKey: nextSeries.categoryKey,
             setKey: nextSeries.setKey,
-            tcgtrackingCategoryId: nextSeries.tcgtrackingCategoryId,
-            tcgtrackingSetId: nextSeries.tcgtrackingSetId,
-            tcgplayerProductId: nextSeries.tcgplayerProductId,
             name: nextSeries.name,
             number: nextSeries.number,
             rarity: nextSeries.rarity,
@@ -407,9 +411,6 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         catalogProductKey: nextSeries.catalogProductKey,
         categoryKey: nextSeries.categoryKey,
         setKey: nextSeries.setKey,
-        tcgtrackingCategoryId: nextSeries.tcgtrackingCategoryId,
-        tcgtrackingSetId: nextSeries.tcgtrackingSetId,
-        tcgplayerProductId: nextSeries.tcgplayerProductId,
         name: nextSeries.name,
         number: nextSeries.number,
         rarity: nextSeries.rarity,
@@ -456,9 +457,7 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
           await ctx.db.patch('pricingTrackedSeriesRules', existing._id, {
             ruleId: join.ruleId,
             seriesKey: join.seriesKey,
-            catalogProductKey: join.catalogProductKey,
             setKey: join.setKey,
-            categoryKey: join.categoryKey,
             active: true,
             updatedAt: now,
           })
@@ -470,9 +469,7 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         key: join.key,
         ruleId: join.ruleId,
         seriesKey: join.seriesKey,
-        catalogProductKey: join.catalogProductKey,
         setKey: join.setKey,
-        categoryKey: join.categoryKey,
         active: true,
         createdAt: now,
         updatedAt: now,
@@ -631,22 +628,16 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
         currentManapoolPriceCents: snapshot.manapoolPriceCents,
         currentManapoolQuantity: snapshot.manapoolQuantity,
         lastResolvedAt: capturedAt,
-        updatedAt: capturedAt,
       }
-
-      if (
+      const snapshotChanged = seriesSnapshotNeedsPatch(series, basePatch)
+      const historyChanged =
         snapshot.pricingSource !== 'unavailable' &&
         snapshot.snapshotFingerprint &&
         snapshot.snapshotFingerprint !== series.lastSnapshotFingerprint
-      ) {
+
+      if (snapshot.pricingSource !== 'unavailable' && historyChanged) {
         await ctx.db.insert('pricingHistory', {
           seriesKey: series.key,
-          catalogProductKey: series.catalogProductKey,
-          catalogSkuKey: snapshot.preferredCatalogSkuKey,
-          setKey: series.setKey,
-          categoryKey: series.categoryKey,
-          printingKey: series.printingKey,
-          printingLabel: series.printingLabel,
           capturedAt,
           effectiveAt: snapshot.effectiveAt,
           pricingSource: snapshot.pricingSource,
@@ -656,9 +647,6 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
           listingCount: snapshot.listingCount,
           manapoolPriceCents: snapshot.manapoolPriceCents,
           manapoolQuantity: snapshot.manapoolQuantity,
-          snapshotFingerprint: snapshot.snapshotFingerprint,
-          sourcePricingUpdatedAt: snapshot.sourcePricingUpdatedAt,
-          sourceSkuPricingUpdatedAt: snapshot.sourceSkuPricingUpdatedAt,
         })
         insertedHistory += 1
 
@@ -666,11 +654,17 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
           ...basePatch,
           lastSnapshotFingerprint: snapshot.snapshotFingerprint,
           lastSnapshotAt: capturedAt,
+          updatedAt: capturedAt,
         })
         continue
       }
 
-      await ctx.db.patch('pricingTrackedSeries', series._id, basePatch)
+      if (snapshotChanged) {
+        await ctx.db.patch('pricingTrackedSeries', series._id, {
+          ...basePatch,
+          updatedAt: capturedAt,
+        })
+      }
     }
 
     for (const existing of existingIssues) {

@@ -98,21 +98,9 @@ function hasSetSourceChanged(
   )
 }
 
-function needsPolicyResync(existing: {
-  syncedProductCount?: number
-  syncedSkuCount?: number
-  pricingSyncStatus?: 'idle' | 'syncing' | 'error'
-}) {
-  return (
-    typeof existing.syncedProductCount !== 'number' ||
-    typeof existing.syncedSkuCount !== 'number' ||
-    typeof existing.pricingSyncStatus !== 'string'
-  )
-}
-
 function isSetProcessing(existing: {
   syncStatus: 'pending' | 'syncing' | 'ready' | 'error'
-  pricingSyncStatus?: 'idle' | 'syncing' | 'error'
+  pricingSyncStatus: 'idle' | 'syncing' | 'error'
 }) {
   return (
     existing.syncStatus === 'syncing' ||
@@ -143,7 +131,6 @@ export const upsertCategoriesBatch = internalMutation({
           displayName: category.displayName,
           productCount: category.productCount,
           setCount: category.setCount,
-          apiUrl: category.apiUrl,
           updatedAt: category.updatedAt,
         })
         updated += 1
@@ -195,7 +182,6 @@ export const upsertSetsBatch = internalMutation({
 
       if (existing) {
         const shouldResetSyncState =
-          needsPolicyResync(existing) ||
           isStale ||
           (!existing.lastSyncedAt && existing.syncStatus !== 'error') ||
           (existing.syncStatus === 'error' && hasSourceChanged)
@@ -203,12 +189,10 @@ export const upsertSetsBatch = internalMutation({
         await ctx.db.patch('catalogSets', existing._id, {
           categoryKey: incoming.categoryKey,
           tcgtrackingCategoryId: incoming.tcgtrackingCategoryId,
-          categoryName: incoming.categoryName,
           categoryDisplayName: incoming.categoryDisplayName,
           tcgtrackingSetId: incoming.tcgtrackingSetId,
           name: incoming.name,
           abbreviation: incoming.abbreviation,
-          isSupplemental: incoming.isSupplemental,
           publishedOn: incoming.publishedOn,
           modifiedOn: incoming.modifiedOn,
           productCount: incoming.productCount,
@@ -233,9 +217,8 @@ export const upsertSetsBatch = internalMutation({
                     existing.lastSyncError,
                   ),
                 }),
-          pricingSyncStatus: existing.pricingSyncStatus ?? 'idle',
+          pricingSyncStatus: existing.pricingSyncStatus,
           currentPricingSyncStartedAt: existing.currentPricingSyncStartedAt,
-          lastPricingSyncedAt: existing.lastPricingSyncedAt,
           lastPricingSyncError: normalizeOptionalString(
             existing.lastPricingSyncError,
           ),
@@ -250,6 +233,8 @@ export const upsertSetsBatch = internalMutation({
           ...incoming,
           syncStatus: 'pending',
           pricingSyncStatus: 'idle',
+          syncedProductCount: 0,
+          syncedSkuCount: 0,
         })
         inserted += 1
       }
@@ -410,7 +395,6 @@ export const markPricingSyncCompleted = internalMutation({
     await ctx.db.patch('catalogSets', existing._id, {
       pricingSyncStatus: 'idle',
       currentPricingSyncStartedAt: undefined,
-      lastPricingSyncedAt: completedAt,
       lastPricingSyncError: undefined,
       updatedAt: completedAt,
     })
