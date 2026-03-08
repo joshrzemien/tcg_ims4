@@ -1,5 +1,5 @@
-import type { Doc } from '../_generated/dataModel'
 import { needsRuleScopeCleanup } from './syncState'
+import type { Doc } from '../_generated/dataModel'
 
 type SyncCandidateCtx = {
   db: any

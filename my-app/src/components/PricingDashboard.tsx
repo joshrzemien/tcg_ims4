@@ -1495,14 +1495,14 @@ function CreateRuleModal({
                   />
                 </div>
                 <div className="max-h-40 overflow-y-auto rounded border bg-background">
-                  {(categories?.length ?? 0) === 0 ? (
+                  {categories.length === 0 ? (
                     <p className="px-2 py-3 text-center text-xs text-muted-foreground">
                       {searchText.trim()
                         ? 'No categories match the current search.'
                         : 'No categories available.'}
                     </p>
                   ) : (
-                    categories!.map((cat) => (
+                    categories.map((cat) => (
                       <button
                         key={cat.key}
                         type="button"
@@ -1557,14 +1557,14 @@ function CreateRuleModal({
                   />
                 </div>
                 <div className="max-h-48 overflow-y-auto rounded border bg-background">
-                  {(sets?.length ?? 0) === 0 ? (
+                  {sets.length === 0 ? (
                     <p className="px-2 py-3 text-center text-xs text-muted-foreground">
                       {searchText.trim()
                         ? 'No sets match the current search.'
                         : 'No sets available.'}
                     </p>
                   ) : (
-                    sets!.map((set) => (
+                    sets.map((set) => (
                       <button
                         key={set.key}
                         type="button"
@@ -1590,7 +1590,7 @@ function CreateRuleModal({
                 {/* Sync status detail for selected set */}
                 {keyValue && (() => {
                   const selected =
-                    selectedSet ?? sets?.find((s) => s.key === keyValue)
+                    selectedSet ?? sets.find((s) => s.key === keyValue)
                   if (!selected) return null
                   return (
                     <div className="flex items-center gap-2 rounded border border-border/50 bg-muted/5 px-2 py-1.5">
