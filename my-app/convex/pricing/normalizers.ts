@@ -61,11 +61,24 @@ const SKU_VARIANT_CODE_BY_CATEGORY_ID: Partial<
   },
 }
 
+const SKU_VARIANT_CODE_BY_SET_ID: Partial<
+  Record<number, Partial<Record<string, string>>>
+> = {
+  1663: {
+    unlimited: 'UL',
+    unlimited_holofoil: 'ULH',
+    '1st_edition': '1E',
+    '1st_edition_holofoil': '1EH',
+  },
+}
+
 function resolveSkuVariantCode(
   tcgtrackingCategoryId: number,
+  tcgtrackingSetId: number,
   printingKey: string,
 ): string | undefined {
   return (
+    SKU_VARIANT_CODE_BY_SET_ID[tcgtrackingSetId]?.[printingKey] ??
     SKU_VARIANT_CODE_BY_CATEGORY_ID[tcgtrackingCategoryId]?.[printingKey] ??
     DEFAULT_SKU_VARIANT_CODE_BY_PRINTING_KEY[printingKey]
   )
@@ -174,6 +187,7 @@ export function getTrackedPrintingDefinitions(
       printingLabel,
       skuVariantCode: resolveSkuVariantCode(
         product.tcgtrackingCategoryId,
+        product.tcgtrackingSetId,
         printingKey,
       ),
       tcgMarketPriceCents: toOptionalCents(printingValue.market),

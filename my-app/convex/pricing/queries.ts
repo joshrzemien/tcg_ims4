@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
 import { internalQuery, query } from '../_generated/server'
+import { getZeroDashboardStats } from './dashboardReadModel'
 import { categoryRuleAppliesToSet, isSetInRuleScope } from './ruleScope'
 
 const pricingSourceFilterValidator = v.union(
@@ -15,18 +16,6 @@ const pricingResolutionIssueTypeValidator = v.union(
   v.literal('missing_manapool_match'),
   v.literal('sync_error'),
 )
-
-async function countDocuments(
-  queryHandle: AsyncIterable<unknown>,
-): Promise<number> {
-  let count = 0
-
-  for await (const _document of queryHandle) {
-    count += 1
-  }
-
-  return count
-}
 
 function clampLimit(limit: number | undefined, fallback = 50, max = 200) {
   return Math.max(1, Math.min(limit ?? fallback, max))
@@ -64,89 +53,14 @@ function paginateArray<T>(
 export const listRules = query({
   args: {},
   handler: async (ctx) => {
-    const rules = await ctx.db.query('pricingTrackingRules').collect()
-    const catalogSets = await ctx.db.query('catalogSets').collect()
-    const catalogCategories = await ctx.db.query('catalogCategories').collect()
-    const catalogProducts = await ctx.db.query('catalogProducts').collect()
-    const activeSeriesCounts = new Map<string, number>()
-
-    await Promise.all(
-      rules.map(async (rule) => {
-        const activeSeriesCount = await countDocuments(
-          ctx.db
-            .query('pricingTrackedSeriesRules')
-            .withIndex('by_ruleId_active', (q) =>
-              q.eq('ruleId', rule._id).eq('active', true),
-            ),
-        )
-
-        activeSeriesCounts.set(rule._id, activeSeriesCount)
-      }),
+    const [rules, ruleStats] = await Promise.all([
+      ctx.db.query('pricingTrackingRules').collect(),
+      ctx.db.query('pricingRuleDashboardStats').collect(),
+    ])
+    const activeSeriesCounts = new Map(
+      ruleStats.map((stats) => [stats.ruleId, stats.activeSeriesCount]),
     )
-
-    const setCatalogData = new Map(catalogSets.map((set) => [set.key, set]))
-    const categoryData = new Map(
-      catalogCategories.map((category) => [category.key, category]),
-    )
-    const productData = new Map(
-      catalogProducts.map((product) => [product.key, product]),
-    )
-
-    function getSetLabel(setKey: string | undefined) {
-      if (!setKey) {
-        return undefined
-      }
-
-      const set = setCatalogData.get(setKey)
-      return set ? `${set.categoryDisplayName} / ${set.name}` : setKey
-    }
-
-    function getCategoryLabel(categoryKey: string | undefined) {
-      if (!categoryKey) {
-        return undefined
-      }
-
-      return categoryData.get(categoryKey)?.displayName ?? categoryKey
-    }
-
-    function getProductScopeLabel(catalogProductKey: string | undefined) {
-      if (!catalogProductKey) {
-        return undefined
-      }
-
-      const product = productData.get(catalogProductKey)
-      if (!product) {
-        return catalogProductKey
-      }
-
-      return `${getSetLabel(product.setKey) ?? product.setKey} / ${product.name}`
-    }
-
-    function getRuleCategoryKey(rule: (typeof rules)[number]) {
-      if (rule.ruleType === 'category') {
-        return rule.categoryKey
-      }
-
-      if (rule.ruleType === 'set') {
-        return setCatalogData.get(rule.setKey ?? '')?.categoryKey
-      }
-
-      return productData.get(rule.catalogProductKey ?? '')?.categoryKey
-    }
-
-    function getRuleSetKey(rule: (typeof rules)[number]) {
-      if (rule.ruleType === 'set') {
-        return rule.setKey
-      }
-
-      if (rule.ruleType === 'manual_product') {
-        return productData.get(rule.catalogProductKey ?? '')?.setKey
-      }
-
-      return undefined
-    }
-
-    function summarizeCatalogSync(sets: Array<(typeof catalogSets)[number]>) {
+    function summarizeCatalogSync(sets: Array<any>) {
       if (sets.length === 0) {
         return {
           pricingSyncStatus: 'idle',
@@ -188,91 +102,68 @@ export const listRules = query({
       }
     }
 
-    return rules
-      .sort((left, right) => right.createdAt - left.createdAt)
-      .map((rule) => ({
-        categoryGroupKey:
-          getRuleCategoryKey(rule) ?? `ungrouped:${rule._id}`,
-        categoryGroupLabel:
-          getCategoryLabel(getRuleCategoryKey(rule)) ?? 'Ungrouped',
-        setGroupKey: getRuleSetKey(rule),
-        setGroupLabel: getSetLabel(getRuleSetKey(rule)),
-        scopeLabel:
-          rule.ruleType === 'category' && rule.categoryKey
-            ? (getCategoryLabel(rule.categoryKey) ?? rule.categoryKey)
-            : rule.ruleType === 'set' && rule.setKey
-              ? (getSetLabel(rule.setKey) ?? rule.setKey)
-              : rule.ruleType === 'manual_product' && rule.catalogProductKey
-                ? (getProductScopeLabel(rule.catalogProductKey) ??
-                    rule.catalogProductKey)
-                : rule.catalogProductKey ??
-                    rule.setKey ??
-                    rule.categoryKey ??
-                    '--',
-        _id: rule._id,
-        ruleType: rule.ruleType,
-        label: rule.label,
-        active: rule.active,
-        categoryKey: rule.categoryKey,
-        setKey: rule.setKey,
-        catalogProductKey: rule.catalogProductKey,
-        autoTrackFutureSets: rule.autoTrackFutureSets,
-        createdAt: rule.createdAt,
-        updatedAt: rule.updatedAt,
-        activeSeriesCount: activeSeriesCounts.get(rule._id) ?? 0,
-        catalogSetSync: rule.setKey
-          ? summarizeCatalogSync(
-              [setCatalogData.get(rule.setKey)].filter(
-                (set): set is (typeof catalogSets)[number] => set != null,
-              ),
-            )
-          : rule.ruleType === 'category' && rule.categoryKey
-            ? summarizeCatalogSync(
-                catalogSets.filter((set) => categoryRuleAppliesToSet(rule, set)),
+    return await Promise.all(
+      rules
+        .sort((left, right) => right.createdAt - left.createdAt)
+        .map(async (rule) => {
+          let catalogSetSync
+          if (rule.setKey) {
+            const set = await ctx.db
+              .query('catalogSets')
+              .withIndex('by_key', (q) => q.eq('key', rule.setKey!))
+              .unique()
+            catalogSetSync = summarizeCatalogSync(set ? [set] : [])
+          } else if (rule.ruleType === 'category' && rule.categoryKey) {
+            const sets = await ctx.db
+              .query('catalogSets')
+              .withIndex('by_categoryKey', (q) =>
+                q.eq('categoryKey', rule.categoryKey!),
               )
-            : undefined,
-      }))
+              .collect()
+            catalogSetSync = summarizeCatalogSync(
+              sets.filter((set) => categoryRuleAppliesToSet(rule, set)),
+            )
+          }
+
+          return {
+            categoryGroupKey:
+              rule.categoryGroupKey ?? `ungrouped:${rule._id}`,
+            categoryGroupLabel: rule.categoryGroupLabel ?? 'Ungrouped',
+            setGroupKey: rule.setGroupKey,
+            setGroupLabel: rule.setGroupLabel,
+            scopeLabel:
+              rule.scopeLabel ??
+              rule.catalogProductKey ??
+              rule.setKey ??
+              rule.categoryKey ??
+              '--',
+            _id: rule._id,
+            ruleType: rule.ruleType,
+            label: rule.label,
+            active: rule.active,
+            categoryKey: rule.categoryKey,
+            setKey: rule.setKey,
+            catalogProductKey: rule.catalogProductKey,
+            autoTrackFutureSets: rule.autoTrackFutureSets,
+            createdAt: rule.createdAt,
+            updatedAt: rule.updatedAt,
+            activeSeriesCount: activeSeriesCounts.get(rule._id) ?? 0,
+            catalogSetSync,
+          }
+        }),
+    )
   },
 })
 
 export const getPricingStats = query({
   args: {},
   handler: async (ctx) => {
-    const activeIssues = await ctx.db
-      .query('pricingResolutionIssues')
-      .withIndex('by_active', (q) => q.eq('active', true))
-      .collect()
+    const stats = await ctx.db
+      .query('pricingDashboardStats')
+      .withIndex('by_key', (q) => q.eq('key', 'global'))
+      .unique()
 
-    const [
-      totalTrackedSeries,
-      totalActiveTrackedSeries,
-      totalRules,
-      totalActiveRules,
-      totalIssues,
-    ] = await Promise.all([
-      countDocuments(ctx.db.query('pricingTrackedSeries')),
-      countDocuments(
-        ctx.db
-          .query('pricingTrackedSeries')
-          .withIndex('by_active', (q) => q.eq('active', true)),
-      ),
-      countDocuments(ctx.db.query('pricingTrackingRules')),
-      countDocuments(
-        ctx.db
-          .query('pricingTrackingRules')
-          .withIndex('by_active', (q) => q.eq('active', true)),
-      ),
-      countDocuments(ctx.db.query('pricingResolutionIssues')),
-    ])
-
-    return {
-      totalTrackedSeries,
-      totalActiveTrackedSeries,
-      totalRules,
-      totalActiveRules,
-      totalIssues,
-      totalActiveIssues: activeIssues.filter((issue) => !issue.ignoredAt).length,
-    }
+    return stats ?? getZeroDashboardStats()
   },
 })
 

@@ -28,6 +28,8 @@ import type * as orders_sources_manapool from "../orders/sources/manapool.js";
 import type * as orders_sources_tcgplayer from "../orders/sources/tcgplayer.js";
 import type * as orders_sync from "../orders/sync.js";
 import type * as orders_types from "../orders/types.js";
+import type * as pricing_admin from "../pricing/admin.js";
+import type * as pricing_dashboardReadModel from "../pricing/dashboardReadModel.js";
 import type * as pricing_mutations from "../pricing/mutations.js";
 import type * as pricing_normalizers from "../pricing/normalizers.js";
 import type * as pricing_queries from "../pricing/queries.js";
@@ -69,6 +71,8 @@ declare const fullApi: ApiFromModules<{
   "orders/sources/tcgplayer": typeof orders_sources_tcgplayer;
   "orders/sync": typeof orders_sync;
   "orders/types": typeof orders_types;
+  "pricing/admin": typeof pricing_admin;
+  "pricing/dashboardReadModel": typeof pricing_dashboardReadModel;
   "pricing/mutations": typeof pricing_mutations;
   "pricing/normalizers": typeof pricing_normalizers;
   "pricing/queries": typeof pricing_queries;

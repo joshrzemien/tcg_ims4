@@ -1,5 +1,10 @@
 import { v } from 'convex/values'
 import { internalMutation } from '../_generated/server'
+import {
+  refreshRuleDashboardFieldsForCategory,
+  refreshRuleDashboardFieldsForProductKeys,
+  refreshRuleDashboardFieldsForSet,
+} from '../pricing/dashboardReadModel'
 import { listRuleScopedSetKeys } from '../pricing/ruleScope'
 import { getAllowedCatalogCategoryIds } from './config'
 import { pickHigherPrioritySyncMode } from './syncModes'
@@ -122,8 +127,10 @@ export const upsertCategoriesBatch = internalMutation({
   handler: async (ctx, { categories }) => {
     let inserted = 0
     let updated = 0
+    const touchedCategoryKeys = new Set<string>()
 
     for (const category of categories) {
+      touchedCategoryKeys.add(category.key)
       const existing = await ctx.db
         .query('catalogCategories')
         .withIndex('by_key', (q) => q.eq('key', category.key))
@@ -146,6 +153,10 @@ export const upsertCategoriesBatch = internalMutation({
       }
     }
 
+    for (const categoryKey of touchedCategoryKeys) {
+      await refreshRuleDashboardFieldsForCategory(ctx, categoryKey)
+    }
+
     return {
       inserted,
       updated,
@@ -160,8 +171,13 @@ export const upsertSetsBatch = internalMutation({
   handler: async (ctx, { sets }) => {
     let inserted = 0
     let updated = 0
+    const touchedSetKeys = new Set<string>()
+    const touchedCategoryKeys = new Set<string>()
+    const touchedProductKeys = new Set<string>()
 
     for (const incoming of sets) {
+      touchedSetKeys.add(incoming.key)
+      touchedCategoryKeys.add(incoming.categoryKey)
       const existing = await ctx.db
         .query('catalogSets')
         .withIndex('by_key', (q) => q.eq('key', incoming.key))
@@ -238,6 +254,24 @@ export const upsertSetsBatch = internalMutation({
         inserted += 1
       }
     }
+
+    for (const setKey of touchedSetKeys) {
+      await refreshRuleDashboardFieldsForSet(ctx, setKey)
+      const products = await ctx.db
+        .query('catalogProducts')
+        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+        .collect()
+      for (const product of products) {
+        touchedProductKeys.add(product.key)
+      }
+    }
+    for (const categoryKey of touchedCategoryKeys) {
+      await refreshRuleDashboardFieldsForCategory(ctx, categoryKey)
+    }
+    await refreshRuleDashboardFieldsForProductKeys(
+      ctx,
+      [...touchedProductKeys],
+    )
 
     return {
       inserted,
@@ -521,8 +555,10 @@ export const upsertProductsBatch = internalMutation({
   handler: async (ctx, { products, syncStartedAt }) => {
     let inserted = 0
     let updated = 0
+    const touchedProductKeys = new Set<string>()
 
     for (const incoming of products) {
+      touchedProductKeys.add(incoming.key)
       const existing = await ctx.db
         .query('catalogProducts')
         .withIndex('by_key', (q) => q.eq('key', incoming.key))
@@ -542,6 +578,11 @@ export const upsertProductsBatch = internalMutation({
         inserted += 1
       }
     }
+
+    await refreshRuleDashboardFieldsForProductKeys(
+      ctx,
+      [...touchedProductKeys],
+    )
 
     return {
       inserted,

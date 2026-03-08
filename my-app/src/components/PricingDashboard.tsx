@@ -316,6 +316,167 @@ function PricingStatsBar({ stats }: { stats: PricingStats | undefined }) {
 
 // -- Rules Tab --
 
+function RuleRow({
+  rule,
+  rowIndex,
+  togglingId,
+  deletingId,
+  onToggle,
+  onDelete,
+}: {
+  rule: TrackingRule
+  rowIndex: number
+  togglingId: Id<'pricingTrackingRules'> | null
+  deletingId: Id<'pricingTrackingRules'> | null
+  onToggle: (rule: TrackingRule) => void
+  onDelete: (rule: TrackingRule) => void
+}) {
+  return (
+    <TableRow
+      className={cn(
+        'border-border/30',
+        rowIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
+      )}
+    >
+      <TableCell className="px-2 py-1.5">
+        <div className="flex items-center gap-1.5">
+          <Badge
+            className={
+              ruleTypeStyles[rule.ruleType] ??
+              'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+            }
+          >
+            {humanize(rule.ruleType)}
+          </Badge>
+          <span className="text-xs font-medium text-foreground">
+            {rule.label}
+          </span>
+        </div>
+        {rule.ruleType === 'category' && (
+          <div className="mt-0.5 pl-0.5">
+            <Badge
+              className={
+                rule.autoTrackFutureSets !== false
+                  ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-400'
+                  : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+              }
+            >
+              {rule.autoTrackFutureSets !== false
+                ? 'auto add new sets'
+                : 'no auto add'}
+            </Badge>
+          </div>
+        )}
+      </TableCell>
+      <TableCell className="px-2 py-1.5">
+        <Badge
+          className={
+            rule.active
+              ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
+              : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+          }
+        >
+          {rule.active ? 'Active' : 'Paused'}
+        </Badge>
+      </TableCell>
+      <TableCell className="px-2 py-1.5 text-right">
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {rule.activeSeriesCount.toLocaleString()}
+        </span>
+      </TableCell>
+      <TableCell className="px-2 py-1.5">
+        {rule.catalogSetSync ? (
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1">
+              <Badge
+                className={
+                  pricingSyncStatusStyles[
+                    rule.catalogSetSync.pricingSyncStatus
+                  ] ?? pricingSyncStatusStyles.idle
+                }
+              >
+                {humanize(rule.catalogSetSync.pricingSyncStatus)}
+              </Badge>
+              {rule.catalogSetSync.pendingSyncMode && (
+                <Badge
+                  className={
+                    syncModeStyles[rule.catalogSetSync.pendingSyncMode] ??
+                    'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                  }
+                >
+                  pending {humanize(rule.catalogSetSync.pendingSyncMode)}
+                </Badge>
+              )}
+              {rule.ruleType === 'category' &&
+                !rule.catalogSetSync.pendingSyncMode &&
+                (rule.catalogSetSync.pendingSetCount ?? 0) > 0 && (
+                  <Badge className="border-zinc-500/20 bg-zinc-500/5 text-zinc-400">
+                    {rule.catalogSetSync.pendingSetCount} pending
+                  </Badge>
+                )}
+            </div>
+            <span className="text-[10px] tabular-nums text-muted-foreground">
+              {rule.ruleType === 'category'
+                ? `${rule.catalogSetSync.scopedSetCount?.toLocaleString() ?? 0} sets · ${rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products · ${rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus`
+                : `${rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products · ${rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus`}
+            </span>
+          </div>
+        ) : (
+          <span className="text-[10px] text-muted-foreground">--</span>
+        )}
+      </TableCell>
+      <TableCell className="px-2 py-1.5">
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {formatDate(rule.createdAt)}
+        </span>
+      </TableCell>
+      <TableCell className="px-2 py-1.5">
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => onToggle(rule)}
+                disabled={
+                  togglingId === rule._id || deletingId === rule._id
+                }
+              >
+                {rule.active ? (
+                  <EyeOff className="size-3" />
+                ) : (
+                  <Eye className="size-3" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {rule.active ? 'Pause rule' : 'Activate rule'}
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                className="text-red-400 hover:text-red-300"
+                onClick={() => onDelete(rule)}
+                disabled={
+                  deletingId === rule._id || togglingId === rule._id
+                }
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Delete rule</TooltipContent>
+          </Tooltip>
+        </div>
+      </TableCell>
+    </TableRow>
+  )
+}
+
 function RulesTab({
   rules,
   onFlash,
@@ -417,13 +578,13 @@ function RulesTab({
 
   return (
     <div className="overflow-x-auto rounded border bg-card">
-      <Table className="min-w-[900px]">
+      <Table className="min-w-[700px]">
         <TableHeader className="sticky top-0 z-10 bg-card">
           <TableRow className="border-border/50 hover:bg-transparent">
-            {['Label', 'Type', 'Status', 'Scope', 'Series', 'Pricing Sync', 'Created', 'Actions'].map(
+            {['Rule', 'Status', 'Series', 'Sync', 'Created', ''].map(
               (h) => (
                 <TableHead
-                  key={h}
+                  key={h || '_actions'}
                   className={cn(
                     'h-7 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
                     h === 'Series' && 'text-right',
@@ -444,7 +605,7 @@ function RulesTab({
                 categoryIndex > 0 && 'border-t-2',
               )}
             >
-              <TableCell colSpan={8} className="px-2 py-2">
+              <TableCell colSpan={6} className="px-2 py-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
@@ -488,311 +649,29 @@ function RulesTab({
               </TableCell>
             </TableRow>,
             ...categoryGroup.categoryRules.map((rule, ruleIndex) => (
-              <TableRow
+              <RuleRow
                 key={rule._id}
-                className={cn(
-                  'border-border/30',
-                  ruleIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
-                )}
-              >
-                <TableCell className="px-2 py-1.5">
-                  <span className="text-xs font-medium text-foreground">
-                    {rule.label}
-                  </span>
-                </TableCell>
-                <TableCell className="px-2 py-1.5">
-                  <Badge
-                    className={
-                      ruleTypeStyles[rule.ruleType] ??
-                      'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                    }
-                  >
-                    {humanize(rule.ruleType)}
-                  </Badge>
-                </TableCell>
-                <TableCell className="px-2 py-1.5">
-                  <Badge
-                    className={
-                      rule.active
-                        ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
-                        : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                    }
-                  >
-                    {rule.active ? 'Active' : 'Paused'}
-                  </Badge>
-                </TableCell>
-                <TableCell className="px-2 py-1.5">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-muted-foreground">
-                      {rule.scopeLabel}
-                    </span>
-                    {rule.ruleType === 'category' && (
-                      <div className="flex flex-wrap items-center gap-1">
-                        <Badge
-                          className={
-                            rule.autoTrackFutureSets !== false
-                              ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-400'
-                              : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                          }
-                        >
-                          {rule.autoTrackFutureSets !== false
-                            ? 'auto add new sets'
-                            : 'no auto add'}
-                        </Badge>
-                      </div>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell className="px-2 py-1.5 text-right">
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {rule.activeSeriesCount.toLocaleString()}
-                  </span>
-                </TableCell>
-                <TableCell className="px-2 py-1.5">
-                  {rule.catalogSetSync ? (
-                    <div className="flex flex-col gap-0.5">
-                      <div className="flex items-center gap-1">
-                        <Badge
-                          className={
-                            pricingSyncStatusStyles[rule.catalogSetSync.pricingSyncStatus] ??
-                            pricingSyncStatusStyles.idle
-                          }
-                        >
-                          {humanize(rule.catalogSetSync.pricingSyncStatus)}
-                        </Badge>
-                        {rule.catalogSetSync.pendingSyncMode && (
-                          <Badge
-                            className={
-                              syncModeStyles[rule.catalogSetSync.pendingSyncMode] ??
-                              'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                            }
-                          >
-                            pending {humanize(rule.catalogSetSync.pendingSyncMode)}
-                          </Badge>
-                        )}
-                        {rule.ruleType === 'category' &&
-                          !rule.catalogSetSync.pendingSyncMode &&
-                          (rule.catalogSetSync.pendingSetCount ?? 0) > 0 && (
-                            <Badge className="border-zinc-500/20 bg-zinc-500/5 text-zinc-400">
-                              {rule.catalogSetSync.pendingSetCount} pending
-                            </Badge>
-                          )}
-                      </div>
-                      <span className="text-[10px] tabular-nums text-muted-foreground">
-                        {rule.ruleType === 'category'
-                          ? `${rule.catalogSetSync.scopedSetCount?.toLocaleString() ?? 0} sets`
-                          : `${rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products / ${rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus`}
-                        {rule.ruleType === 'category' && (
-                          <>
-                            {' · '}
-                            {rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products
-                            {' · '}
-                            {rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus
-                          </>
-                        )}
-                      </span>
-                    </div>
-                  ) : (
-                    <span className="text-[10px] text-muted-foreground">--</span>
-                  )}
-                </TableCell>
-                <TableCell className="px-2 py-1.5">
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    {formatDate(rule.createdAt)}
-                  </span>
-                </TableCell>
-                <TableCell className="px-2 py-1.5">
-                  <div className="flex items-center gap-1">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => void handleToggle(rule)}
-                          disabled={
-                            togglingId === rule._id || deletingId === rule._id
-                          }
-                        >
-                          {rule.active ? (
-                            <EyeOff className="size-3" />
-                          ) : (
-                            <Eye className="size-3" />
-                          )}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        {rule.active ? 'Pause rule' : 'Activate rule'}
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          className="text-red-400 hover:text-red-300"
-                          onClick={() => void handleDelete(rule)}
-                          disabled={
-                            deletingId === rule._id || togglingId === rule._id
-                          }
-                        >
-                          <Trash2 className="size-3" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Delete rule</TooltipContent>
-                    </Tooltip>
-                  </div>
-                </TableCell>
-              </TableRow>
+                rule={rule}
+                rowIndex={ruleIndex}
+                togglingId={togglingId}
+                deletingId={deletingId}
+                onToggle={(r) => void handleToggle(r)}
+                onDelete={(r) => void handleDelete(r)}
+              />
             )),
-            ...categoryGroup.setGroups.flatMap((setGroup) => [
-              <TableRow
-                key={`set:${categoryGroup.key}:${setGroup.key}`}
-                className="border-border/20 bg-muted/5 hover:bg-muted/5"
-              >
-                <TableCell colSpan={8} className="px-2 py-1.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0 flex items-center gap-1.5">
-                      <Badge className="border-violet-500/20 bg-violet-500/5 text-violet-400">
-                        set
-                      </Badge>
-                      <span className="truncate text-[10px] font-medium text-foreground">
-                        {setGroup.label}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-muted-foreground">
-                      {setGroup.rules.length} rule{setGroup.rules.length === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                </TableCell>
-              </TableRow>,
-              ...setGroup.rules.map((rule, ruleIndex) => (
-                <TableRow
+            ...categoryGroup.setGroups.flatMap((setGroup) =>
+              setGroup.rules.map((rule, ruleIndex) => (
+                <RuleRow
                   key={rule._id}
-                  className={cn(
-                    'border-border/30',
-                    ruleIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
-                  )}
-                >
-                  <TableCell className="px-2 py-1.5">
-                    <span className="text-xs font-medium text-foreground">
-                      {rule.label}
-                    </span>
-                  </TableCell>
-                  <TableCell className="px-2 py-1.5">
-                    <Badge
-                      className={
-                        ruleTypeStyles[rule.ruleType] ??
-                        'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                      }
-                    >
-                      {humanize(rule.ruleType)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="px-2 py-1.5">
-                    <Badge
-                      className={
-                        rule.active
-                          ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
-                          : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                      }
-                    >
-                      {rule.active ? 'Active' : 'Paused'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="px-2 py-1.5">
-                    <span className="text-[10px] text-muted-foreground">
-                      {rule.scopeLabel}
-                    </span>
-                  </TableCell>
-                  <TableCell className="px-2 py-1.5 text-right">
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {rule.activeSeriesCount.toLocaleString()}
-                    </span>
-                  </TableCell>
-                  <TableCell className="px-2 py-1.5">
-                    {rule.catalogSetSync ? (
-                      <div className="flex flex-col gap-0.5">
-                        <div className="flex items-center gap-1">
-                          <Badge
-                            className={
-                              pricingSyncStatusStyles[rule.catalogSetSync.pricingSyncStatus] ??
-                              pricingSyncStatusStyles.idle
-                            }
-                          >
-                            {humanize(rule.catalogSetSync.pricingSyncStatus)}
-                          </Badge>
-                          {rule.catalogSetSync.pendingSyncMode && (
-                            <Badge
-                              className={
-                                syncModeStyles[rule.catalogSetSync.pendingSyncMode] ??
-                                'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                              }
-                            >
-                              pending {humanize(rule.catalogSetSync.pendingSyncMode)}
-                            </Badge>
-                          )}
-                        </div>
-                        <span className="text-[10px] tabular-nums text-muted-foreground">
-                          {`${rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products / ${rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus`}
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">--</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="px-2 py-1.5">
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {formatDate(rule.createdAt)}
-                    </span>
-                  </TableCell>
-                  <TableCell className="px-2 py-1.5">
-                    <div className="flex items-center gap-1">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            onClick={() => void handleToggle(rule)}
-                            disabled={
-                              togglingId === rule._id || deletingId === rule._id
-                            }
-                          >
-                            {rule.active ? (
-                              <EyeOff className="size-3" />
-                            ) : (
-                              <Eye className="size-3" />
-                            )}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {rule.active ? 'Pause rule' : 'Activate rule'}
-                        </TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            className="text-red-400 hover:text-red-300"
-                            onClick={() => void handleDelete(rule)}
-                            disabled={
-                              deletingId === rule._id || togglingId === rule._id
-                            }
-                          >
-                            <Trash2 className="size-3" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Delete rule</TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                  rule={rule}
+                  rowIndex={ruleIndex}
+                  togglingId={togglingId}
+                  deletingId={deletingId}
+                  onToggle={(r) => void handleToggle(r)}
+                  onDelete={(r) => void handleDelete(r)}
+                />
               )),
-            ]),
+            ),
           ])}
         </TableBody>
       </Table>
@@ -1447,6 +1326,30 @@ function CreateRuleModal({
     ruleType === 'set' ? {} : 'skip',
   )
 
+  const filteredCategories =
+    categories?.filter((cat) => {
+      const q = searchText.trim().toLowerCase()
+      if (!q) return true
+      return (
+        cat.displayName.toLowerCase().includes(q) ||
+        cat.name.toLowerCase().includes(q) ||
+        cat.key.toLowerCase().includes(q)
+      )
+    }) ?? []
+
+  const filteredSets =
+    sets?.filter((set) => {
+      const q = searchText.trim().toLowerCase()
+      if (!q) return true
+      return (
+        set.name.toLowerCase().includes(q) ||
+        set.categoryDisplayName.toLowerCase().includes(q) ||
+        set.label.toLowerCase().includes(q) ||
+        set.key.toLowerCase().includes(q) ||
+        (set.abbreviation?.toLowerCase().includes(q) ?? false)
+      )
+    }) ?? []
+
   const searchResults = useQuery(
     api.pricing.queries.searchCatalogProducts,
     ruleType === 'manual_product' && searchText.trim().length >= 2
@@ -1577,7 +1480,7 @@ function CreateRuleModal({
           </div>
         )}
 
-        {/* Category dropdown */}
+        {/* Category search */}
         {ruleType === 'category' && (
           <div className="space-y-1.5">
             <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1586,27 +1489,58 @@ function CreateRuleModal({
             {!categories ? (
               <div className="h-8 animate-pulse rounded border bg-muted/10" />
             ) : (
-              <select
-                value={keyValue}
-                onChange={(e) => {
-                  setKeyValue(e.target.value)
-                  const cat = categories.find((c) => c.key === e.target.value)
-                  if (cat && !label) setLabel(`Track category ${cat.displayName}`)
-                }}
-                className="h-8 w-full rounded border bg-background px-2 text-xs text-foreground focus:border-ring focus:outline-none"
-              >
-                <option value="">Select a category...</option>
-                {categories.map((cat) => (
-                  <option key={cat.key} value={cat.key}>
-                    {cat.displayName} ({cat.setCount} sets, {cat.productCount.toLocaleString()} products)
-                  </option>
-                ))}
-              </select>
+              <>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search categories..."
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+                  />
+                </div>
+                <div className="max-h-40 overflow-y-auto rounded border bg-background">
+                  {filteredCategories.length === 0 ? (
+                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                      No categories match
+                    </p>
+                  ) : (
+                    filteredCategories.map((cat) => (
+                      <button
+                        key={cat.key}
+                        type="button"
+                        className={cn(
+                          'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
+                          keyValue === cat.key && 'bg-primary/10 text-primary',
+                        )}
+                        onClick={() => {
+                          setKeyValue(cat.key)
+                          if (!label) setLabel(`Track category ${cat.displayName}`)
+                        }}
+                      >
+                        <span className="flex-1 truncate font-medium">
+                          {cat.displayName}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {cat.setCount} sets · {cat.productCount.toLocaleString()} products
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+                {keyValue && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Selected:{' '}
+                    <span className="font-mono text-foreground">{keyValue}</span>
+                  </p>
+                )}
+              </>
             )}
           </div>
         )}
 
-        {/* Set dropdown */}
+        {/* Set search */}
         {ruleType === 'set' && (
           <div className="space-y-1.5">
             <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1615,55 +1549,80 @@ function CreateRuleModal({
             {!sets ? (
               <div className="h-8 animate-pulse rounded border bg-muted/10" />
             ) : (
-              <select
-                value={keyValue}
-                onChange={(e) => {
-                  setKeyValue(e.target.value)
-                  const set = sets.find((s) => s.key === e.target.value)
-                  if (set && !label) setLabel(`Track set ${set.name}`)
-                }}
-                className="h-8 w-full rounded border bg-background px-2 text-xs text-foreground focus:border-ring focus:outline-none"
-              >
-                <option value="">Select a set...</option>
-                {sets.map((set) => (
-                  <option key={set.key} value={set.key}>
-                    {set.label} ({set.productCount.toLocaleString()} products)
-                  </option>
-                ))}
-              </select>
-            )}
-            {/* Sync status detail for selected set */}
-            {keyValue && sets && (() => {
-              const selected = sets.find((s) => s.key === keyValue)
-              if (!selected) return null
-              return (
-                <div className="flex items-center gap-2 rounded border border-border/50 bg-muted/5 px-2 py-1.5">
-                  <Badge
-                    className={
-                      pricingSyncStatusStyles[selected.pricingSyncStatus] ??
-                      pricingSyncStatusStyles.idle
-                    }
-                  >
-                    pricing {humanize(selected.pricingSyncStatus)}
-                  </Badge>
-                  {selected.pendingSyncMode && (
-                    <Badge
-                      className={
-                        syncModeStyles[selected.pendingSyncMode] ??
-                        'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                      }
-                    >
-                      pending {humanize(selected.pendingSyncMode)}
-                    </Badge>
-                  )}
-                  <span className="text-[10px] tabular-nums text-muted-foreground">
-                    {selected.syncedProductCount?.toLocaleString() ?? 0} / {selected.productCount.toLocaleString()} products
-                    {' · '}
-                    {selected.syncedSkuCount?.toLocaleString() ?? 0} / {selected.skuCount.toLocaleString()} skus synced
-                  </span>
+              <>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search sets..."
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+                  />
                 </div>
-              )
-            })()}
+                <div className="max-h-48 overflow-y-auto rounded border bg-background">
+                  {filteredSets.length === 0 ? (
+                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                      No sets match
+                    </p>
+                  ) : (
+                    filteredSets.map((set) => (
+                      <button
+                        key={set.key}
+                        type="button"
+                        className={cn(
+                          'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
+                          keyValue === set.key && 'bg-primary/10 text-primary',
+                        )}
+                        onClick={() => {
+                          setKeyValue(set.key)
+                          if (!label) setLabel(`Track set ${set.name}`)
+                        }}
+                      >
+                        <span className="flex-1 truncate font-medium">
+                          {set.label}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {set.productCount.toLocaleString()} products
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+                {/* Sync status detail for selected set */}
+                {keyValue && (() => {
+                  const selected = sets.find((s) => s.key === keyValue)
+                  if (!selected) return null
+                  return (
+                    <div className="flex items-center gap-2 rounded border border-border/50 bg-muted/5 px-2 py-1.5">
+                      <Badge
+                        className={
+                          pricingSyncStatusStyles[selected.pricingSyncStatus] ??
+                          pricingSyncStatusStyles.idle
+                        }
+                      >
+                        pricing {humanize(selected.pricingSyncStatus)}
+                      </Badge>
+                      {selected.pendingSyncMode && (
+                        <Badge
+                          className={
+                            syncModeStyles[selected.pendingSyncMode] ??
+                            'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                          }
+                        >
+                          pending {humanize(selected.pendingSyncMode)}
+                        </Badge>
+                      )}
+                      <span className="text-[10px] tabular-nums text-muted-foreground">
+                        {selected.syncedProductCount?.toLocaleString() ?? 0} / {selected.productCount.toLocaleString()} products
+                        {' · '}
+                        {selected.syncedSkuCount?.toLocaleString() ?? 0} / {selected.skuCount.toLocaleString()} skus synced
+                      </span>
+                    </div>
+                  )
+                })()}
+              </>
+            )}
           </div>
         )}
 
@@ -1741,7 +1700,10 @@ export function PricingDashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [syncingCatalog, setSyncingCatalog] = useState(false)
 
-  const rules = useQuery(api.pricing.queries.listRules)
+  const rules = useQuery(
+    api.pricing.queries.listRules,
+    activeTab === 'rules' ? {} : 'skip',
+  )
   const pricingStats = useQuery(api.pricing.queries.getPricingStats)
   const syncCatalogNow = useAction(api.catalog.sync.syncCatalogNow)
 

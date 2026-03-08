@@ -199,6 +199,12 @@ export default defineSchema({
     categoryKey: v.optional(v.string()),
     setKey: v.optional(v.string()),
     catalogProductKey: v.optional(v.string()),
+    scopeLabel: v.optional(v.string()),
+    categoryGroupKey: v.optional(v.string()),
+    categoryGroupLabel: v.optional(v.string()),
+    setGroupKey: v.optional(v.string()),
+    setGroupLabel: v.optional(v.string()),
+    activeSeriesCount: v.optional(v.number()),
     seedExistingSets: v.optional(v.boolean()),
     autoTrackFutureSets: v.optional(v.boolean()),
     createdAt: v.number(),
@@ -312,6 +318,24 @@ export default defineSchema({
     .index('by_seriesKey', ['seriesKey'])
     .index('by_catalogProductKey', ['catalogProductKey'])
     .index('by_setKey', ['setKey']),
+  pricingDashboardStats: defineTable({
+    key: v.string(),
+    totalTrackedSeries: v.number(),
+    totalActiveTrackedSeries: v.number(),
+    totalRules: v.number(),
+    totalActiveRules: v.number(),
+    totalIssues: v.number(),
+    totalActiveIssues: v.number(),
+    updatedAt: v.number(),
+  }).index('by_key', ['key']),
+  pricingRuleDashboardStats: defineTable({
+    key: v.string(),
+    ruleId: v.id('pricingTrackingRules'),
+    activeSeriesCount: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_key', ['key'])
+    .index('by_ruleId', ['ruleId']),
   shipments: defineTable({
     orderId: v.optional(v.id('orders')),
     status: shippingStatusValidator, // Canonical EasyPost-derived order shipping status

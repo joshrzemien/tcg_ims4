@@ -7,6 +7,13 @@ import {
   getTrackedPrintingDefinitions,
   resolveSeriesSnapshot,
 } from './normalizers'
+import {
+  applyDashboardStatsDelta,
+  deleteRuleDashboardStats,
+  refreshRuleDashboardFields,
+  replaceDashboardStats,
+  setRuleActiveSeriesCount,
+} from './dashboardReadModel'
 import { categoryRuleAppliesToSet } from './ruleScope'
 import type { Doc, Id } from '../_generated/dataModel'
 
@@ -16,6 +23,30 @@ type PricingMutationCtx = any
 
 function buildSyncIssueKey(setKey: string) {
   return `sync:${setKey}`
+}
+
+function isActiveUnignoredIssue(issue: {
+  active?: boolean
+  ignoredAt?: number
+}) {
+  return issue.active === true && !issue.ignoredAt
+}
+
+async function countActiveJoinsForRule(
+  ctx: PricingMutationCtx,
+  ruleId: Id<'pricingTrackingRules'>,
+) {
+  let count = 0
+
+  for await (const _join of ctx.db
+    .query('pricingTrackedSeriesRules')
+    .withIndex('by_ruleId_active', (q: any) =>
+      q.eq('ruleId', ruleId).eq('active', true),
+    )) {
+    count += 1
+  }
+
+  return count
 }
 
 async function loadRelevantRulesForSet(
@@ -305,10 +336,27 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
     }
 
     const desiredJoinCountBySeries = new Map<string, number>()
+    const desiredActiveJoinCountByRule = new Map<Id<'pricingTrackingRules'>, number>()
     for (const join of desiredJoins.values()) {
       desiredJoinCountBySeries.set(
         join.seriesKey,
         (desiredJoinCountBySeries.get(join.seriesKey) ?? 0) + 1,
+      )
+      desiredActiveJoinCountByRule.set(
+        join.ruleId,
+        (desiredActiveJoinCountByRule.get(join.ruleId) ?? 0) + 1,
+      )
+    }
+
+    const existingActiveJoinCountByRule = new Map<Id<'pricingTrackingRules'>, number>()
+    for (const join of existingJoins) {
+      if (!join.active) {
+        continue
+      }
+
+      existingActiveJoinCountByRule.set(
+        join.ruleId,
+        (existingActiveJoinCountByRule.get(join.ruleId) ?? 0) + 1,
       )
     }
 
@@ -318,6 +366,9 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
     const existingJoinsByKey = new Map(
       existingJoins.map((join) => [join.key, join]),
     )
+    let insertedSeriesCount = 0
+    let activatedSeriesCount = 0
+    let deactivatedSeriesCount = 0
 
     for (const series of desiredSeries.values()) {
       const activeRuleCount = desiredJoinCountBySeries.get(series.key) ?? 0
@@ -371,10 +422,15 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         active: nextSeries.active,
         updatedAt: now,
       })
+      insertedSeriesCount += 1
     }
 
     for (const existing of existingSeries) {
       if (desiredSeries.has(existing.key)) {
+        const nextActive = (desiredJoinCountBySeries.get(existing.key) ?? 0) > 0
+        if (!existing.active && nextActive) {
+          activatedSeriesCount += 1
+        }
         continue
       }
 
@@ -387,6 +443,9 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         active: false,
         updatedAt: now,
       })
+      if (existing.active) {
+        deactivatedSeriesCount += 1
+      }
     }
 
     for (const join of desiredJoins.values()) {
@@ -429,6 +488,33 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         active: false,
         updatedAt: now,
       })
+    }
+
+    const affectedRuleIds = new Set<Id<'pricingTrackingRules'>>([
+      ...existingActiveJoinCountByRule.keys(),
+      ...desiredActiveJoinCountByRule.keys(),
+    ])
+
+    for (const ruleId of affectedRuleIds) {
+      await setRuleActiveSeriesCount(
+        ctx,
+        ruleId,
+        await countActiveJoinsForRule(ctx, ruleId),
+        now,
+      )
+    }
+
+    const totalActiveTrackedSeriesDelta =
+      insertedSeriesCount + activatedSeriesCount - deactivatedSeriesCount
+    if (insertedSeriesCount !== 0 || totalActiveTrackedSeriesDelta !== 0) {
+      await applyDashboardStatsDelta(
+        ctx,
+        {
+          totalTrackedSeries: insertedSeriesCount,
+          totalActiveTrackedSeries: totalActiveTrackedSeriesDelta,
+        },
+        now,
+      )
     }
 
     return {
@@ -482,6 +568,8 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
     }
 
     let insertedHistory = 0
+    let totalIssuesDelta = 0
+    let totalActiveIssuesDelta = 0
 
     for (const series of seriesRows) {
       const product = productsByKey.get(series.catalogProductKey)
@@ -502,12 +590,16 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
         desiredIssueKeys.add(key)
 
         if (existing) {
+          const wasActiveUnignored = isActiveUnignoredIssue(existing)
           await ctx.db.patch('pricingResolutionIssues', existing._id, {
             details: issue.details,
             lastSeenAt: capturedAt,
             occurrenceCount: existing.occurrenceCount + 1,
             active: true,
           })
+          if (!wasActiveUnignored && !existing.ignoredAt) {
+            totalActiveIssuesDelta += 1
+          }
         } else {
           await ctx.db.insert('pricingResolutionIssues', {
             key,
@@ -523,6 +615,8 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
             active: true,
             ignoredAt: undefined,
           })
+          totalIssuesDelta += 1
+          totalActiveIssuesDelta += 1
         }
       }
 
@@ -588,6 +682,20 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
         active: false,
         lastSeenAt: capturedAt,
       })
+      if (isActiveUnignoredIssue(existing)) {
+        totalActiveIssuesDelta -= 1
+      }
+    }
+
+    if (totalIssuesDelta !== 0 || totalActiveIssuesDelta !== 0) {
+      await applyDashboardStatsDelta(
+        ctx,
+        {
+          totalIssues: totalIssuesDelta,
+          totalActiveIssues: totalActiveIssuesDelta,
+        },
+        capturedAt,
+      )
     }
 
     return {
@@ -630,12 +738,23 @@ export const upsertSyncIssue = internalMutation({
     }
 
     if (existing) {
+      const wasActiveUnignored = isActiveUnignoredIssue(existing)
       await ctx.db.patch('pricingResolutionIssues', existing._id, {
         details,
         lastSeenAt: failedAt,
         occurrenceCount: existing.occurrenceCount + 1,
         active: true,
       })
+
+      if (!wasActiveUnignored && !existing.ignoredAt) {
+        await applyDashboardStatsDelta(
+          ctx,
+          {
+            totalActiveIssues: 1,
+          },
+          failedAt,
+        )
+      }
 
       return { key, updated: true }
     }
@@ -654,6 +773,14 @@ export const upsertSyncIssue = internalMutation({
       active: true,
       ignoredAt: undefined,
     })
+    await applyDashboardStatsDelta(
+      ctx,
+      {
+        totalIssues: 1,
+        totalActiveIssues: 1,
+      },
+      failedAt,
+    )
 
     return { key, updated: false }
   },
@@ -679,6 +806,15 @@ export const resolveSyncIssue = internalMutation({
       active: false,
       lastSeenAt: resolvedAt,
     })
+    if (isActiveUnignoredIssue(existing)) {
+      await applyDashboardStatsDelta(
+        ctx,
+        {
+          totalActiveIssues: -1,
+        },
+        resolvedAt,
+      )
+    }
 
     return { key, resolved: true }
   },
@@ -689,6 +825,8 @@ export const backfillSyncIssues = mutation({
   handler: async (ctx) => {
     const erroredSets = await ctx.db.query('catalogSets').collect()
     let insertedOrUpdated = 0
+    let totalIssuesDelta = 0
+    let totalActiveIssuesDelta = 0
 
     for (const set of erroredSets) {
       if (set.syncStatus !== 'error' && set.pricingSyncStatus !== 'error') {
@@ -711,11 +849,15 @@ export const backfillSyncIssues = mutation({
       }
 
       if (existing) {
+        const wasActiveUnignored = isActiveUnignoredIssue(existing)
         await ctx.db.patch('pricingResolutionIssues', existing._id, {
           details,
           lastSeenAt: set.updatedAt,
           active: true,
         })
+        if (!wasActiveUnignored && !existing.ignoredAt) {
+          totalActiveIssuesDelta += 1
+        }
       } else {
         await ctx.db.insert('pricingResolutionIssues', {
           key,
@@ -731,9 +873,18 @@ export const backfillSyncIssues = mutation({
           active: true,
           ignoredAt: undefined,
         })
+        totalIssuesDelta += 1
+        totalActiveIssuesDelta += 1
       }
 
       insertedOrUpdated += 1
+    }
+
+    if (totalIssuesDelta !== 0 || totalActiveIssuesDelta !== 0) {
+      await applyDashboardStatsDelta(ctx, {
+        totalIssues: totalIssuesDelta,
+        totalActiveIssues: totalActiveIssuesDelta,
+      })
     }
 
     return { insertedOrUpdated }
@@ -751,13 +902,80 @@ export const setIssueIgnored = mutation({
       throw new Error(`Pricing issue not found: ${issueId}`)
     }
 
+    const updatedAt = Date.now()
     await ctx.db.patch('pricingResolutionIssues', issueId, {
-      ignoredAt: ignored ? Date.now() : undefined,
+      ignoredAt: ignored ? updatedAt : undefined,
     })
+    if (issue.active) {
+      if (ignored && !issue.ignoredAt) {
+        await applyDashboardStatsDelta(
+          ctx,
+          {
+            totalActiveIssues: -1,
+          },
+          updatedAt,
+        )
+      } else if (!ignored && issue.ignoredAt) {
+        await applyDashboardStatsDelta(
+          ctx,
+          {
+            totalActiveIssues: 1,
+          },
+          updatedAt,
+        )
+      }
+    }
 
     return {
       issueId,
       ignored,
+    }
+  },
+})
+
+export const replaceDashboardStatsSnapshot = internalMutation({
+  args: {
+    stats: v.object({
+      totalTrackedSeries: v.number(),
+      totalActiveTrackedSeries: v.number(),
+      totalRules: v.number(),
+      totalActiveRules: v.number(),
+      totalIssues: v.number(),
+      totalActiveIssues: v.number(),
+    }),
+    updatedAt: v.optional(v.number()),
+  },
+  handler: async (ctx, { stats, updatedAt }) => {
+    await replaceDashboardStats(ctx, stats, updatedAt ?? Date.now())
+
+    return {
+      replaced: true,
+    }
+  },
+})
+
+export const rebuildRuleDashboardEntry = internalMutation({
+  args: {
+    ruleId: v.id('pricingTrackingRules'),
+    activeSeriesCount: v.number(),
+  },
+  handler: async (ctx, { ruleId, activeSeriesCount }) => {
+    const rule = await ctx.db.get('pricingTrackingRules', ruleId)
+    if (!rule) {
+      await deleteRuleDashboardStats(ctx, ruleId)
+      return {
+        ruleId,
+        found: false,
+      }
+    }
+
+    await setRuleActiveSeriesCount(ctx, ruleId, activeSeriesCount)
+    await refreshRuleDashboardFields(ctx, ruleId)
+
+    return {
+      ruleId,
+      found: true,
+      activeSeriesCount,
     }
   },
 })
@@ -791,6 +1009,17 @@ export const createManualProductRule = mutation({
       createdAt: now,
       updatedAt: now,
     })
+
+    await refreshRuleDashboardFields(ctx, ruleId)
+    await setRuleActiveSeriesCount(ctx, ruleId, 0, now)
+    await applyDashboardStatsDelta(
+      ctx,
+      {
+        totalRules: 1,
+        totalActiveRules: 1,
+      },
+      now,
+    )
 
     await ctx.scheduler.runAfter(
       0,
@@ -833,6 +1062,17 @@ export const createSetRule = mutation({
       createdAt: now,
       updatedAt: now,
     })
+
+    await refreshRuleDashboardFields(ctx, ruleId)
+    await setRuleActiveSeriesCount(ctx, ruleId, 0, now)
+    await applyDashboardStatsDelta(
+      ctx,
+      {
+        totalRules: 1,
+        totalActiveRules: 1,
+      },
+      now,
+    )
 
     await ctx.scheduler.runAfter(
       0,
@@ -877,7 +1117,7 @@ export const createCategoryRule = mutation({
         buildDefaultRuleLabel({
           ruleType: 'category',
           name: category.displayName,
-        }),
+      }),
       active: true,
       categoryKey,
       seedExistingSets: seedExistingSets ?? true,
@@ -885,6 +1125,17 @@ export const createCategoryRule = mutation({
       createdAt: now,
       updatedAt: now,
     })
+
+    await refreshRuleDashboardFields(ctx, ruleId)
+    await setRuleActiveSeriesCount(ctx, ruleId, 0, now)
+    await applyDashboardStatsDelta(
+      ctx,
+      {
+        totalRules: 1,
+        totalActiveRules: 1,
+      },
+      now,
+    )
 
     await ctx.scheduler.runAfter(
       0,
@@ -920,10 +1171,18 @@ export const setRuleActive = mutation({
       }
     }
 
+    const updatedAt = Date.now()
     await ctx.db.patch('pricingTrackingRules', ruleId, {
       active,
-      updatedAt: Date.now(),
+      updatedAt,
     })
+    await applyDashboardStatsDelta(
+      ctx,
+      {
+        totalActiveRules: active ? 1 : -1,
+      },
+      updatedAt,
+    )
 
     await ctx.scheduler.runAfter(
       0,
@@ -952,6 +1211,11 @@ export const deleteRule = mutation({
     }
 
     await ctx.db.delete('pricingTrackingRules', ruleId)
+    await deleteRuleDashboardStats(ctx, ruleId)
+    await applyDashboardStatsDelta(ctx, {
+      totalRules: -1,
+      totalActiveRules: rule.active ? -1 : 0,
+    })
     await ctx.scheduler.runAfter(
       0,
       internal.pricing.mutations.enqueueRuleAffectedSetSyncs,
