@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
 import { internalQuery, query } from '../_generated/server'
+import { categoryRuleAppliesToSet, isSetInRuleScope } from './ruleScope'
 
 const pricingSourceFilterValidator = v.union(
   v.literal('sku'),
@@ -12,6 +13,7 @@ const pricingResolutionIssueTypeValidator = v.union(
   v.literal('unmapped_printing'),
   v.literal('missing_product_price'),
   v.literal('missing_manapool_match'),
+  v.literal('sync_error'),
 )
 
 async function countDocuments(
@@ -63,6 +65,9 @@ export const listRules = query({
   args: {},
   handler: async (ctx) => {
     const rules = await ctx.db.query('pricingTrackingRules').collect()
+    const catalogSets = await ctx.db.query('catalogSets').collect()
+    const catalogCategories = await ctx.db.query('catalogCategories').collect()
+    const catalogProducts = await ctx.db.query('catalogProducts').collect()
     const activeSeriesCounts = new Map<string, number>()
 
     await Promise.all(
@@ -79,11 +84,153 @@ export const listRules = query({
       }),
     )
 
+    const setCatalogData = new Map(catalogSets.map((set) => [set.key, set]))
+    const categoryData = new Map(
+      catalogCategories.map((category) => [category.key, category]),
+    )
+    const productData = new Map(
+      catalogProducts.map((product) => [product.key, product]),
+    )
+
+    function getSetLabel(setKey: string | undefined) {
+      if (!setKey) {
+        return undefined
+      }
+
+      const set = setCatalogData.get(setKey)
+      return set ? `${set.categoryDisplayName} / ${set.name}` : setKey
+    }
+
+    function getCategoryLabel(categoryKey: string | undefined) {
+      if (!categoryKey) {
+        return undefined
+      }
+
+      return categoryData.get(categoryKey)?.displayName ?? categoryKey
+    }
+
+    function getProductScopeLabel(catalogProductKey: string | undefined) {
+      if (!catalogProductKey) {
+        return undefined
+      }
+
+      const product = productData.get(catalogProductKey)
+      if (!product) {
+        return catalogProductKey
+      }
+
+      return `${getSetLabel(product.setKey) ?? product.setKey} / ${product.name}`
+    }
+
+    function getRuleCategoryKey(rule: (typeof rules)[number]) {
+      if (rule.ruleType === 'category') {
+        return rule.categoryKey
+      }
+
+      if (rule.ruleType === 'set') {
+        return setCatalogData.get(rule.setKey ?? '')?.categoryKey
+      }
+
+      return productData.get(rule.catalogProductKey ?? '')?.categoryKey
+    }
+
+    function getRuleSetKey(rule: (typeof rules)[number]) {
+      if (rule.ruleType === 'set') {
+        return rule.setKey
+      }
+
+      if (rule.ruleType === 'manual_product') {
+        return productData.get(rule.catalogProductKey ?? '')?.setKey
+      }
+
+      return undefined
+    }
+
+    function summarizeCatalogSync(sets: Array<(typeof catalogSets)[number]>) {
+      if (sets.length === 0) {
+        return {
+          pricingSyncStatus: 'idle',
+          scopedSetCount: 0,
+          pendingSetCount: 0,
+          syncingSetCount: 0,
+          errorSetCount: 0,
+          syncedProductCount: 0,
+          syncedSkuCount: 0,
+        }
+      }
+
+      const syncingSetCount = sets.filter(
+        (set) => set.pricingSyncStatus === 'syncing',
+      ).length
+      const errorSetCount = sets.filter(
+        (set) => set.pricingSyncStatus === 'error',
+      ).length
+      const pendingSets = sets.filter(
+        (set) => typeof set.pendingSyncMode === 'string',
+      )
+      const pendingModes = [...new Set(pendingSets.map((set) => set.pendingSyncMode))]
+
+      return {
+        pricingSyncStatus: syncingSetCount > 0 ? 'syncing' : 'idle',
+        pendingSyncMode: pendingModes.length === 1 ? pendingModes[0] : undefined,
+        scopedSetCount: sets.length,
+        pendingSetCount: pendingSets.length,
+        syncingSetCount,
+        errorSetCount,
+        syncedProductCount: sets.reduce(
+          (sum, set) => sum + (set.syncedProductCount ?? 0),
+          0,
+        ),
+        syncedSkuCount: sets.reduce(
+          (sum, set) => sum + (set.syncedSkuCount ?? 0),
+          0,
+        ),
+      }
+    }
+
     return rules
       .sort((left, right) => right.createdAt - left.createdAt)
       .map((rule) => ({
-        ...rule,
+        categoryGroupKey:
+          getRuleCategoryKey(rule) ?? `ungrouped:${rule._id}`,
+        categoryGroupLabel:
+          getCategoryLabel(getRuleCategoryKey(rule)) ?? 'Ungrouped',
+        setGroupKey: getRuleSetKey(rule),
+        setGroupLabel: getSetLabel(getRuleSetKey(rule)),
+        scopeLabel:
+          rule.ruleType === 'category' && rule.categoryKey
+            ? (getCategoryLabel(rule.categoryKey) ?? rule.categoryKey)
+            : rule.ruleType === 'set' && rule.setKey
+              ? (getSetLabel(rule.setKey) ?? rule.setKey)
+              : rule.ruleType === 'manual_product' && rule.catalogProductKey
+                ? (getProductScopeLabel(rule.catalogProductKey) ??
+                    rule.catalogProductKey)
+                : rule.catalogProductKey ??
+                    rule.setKey ??
+                    rule.categoryKey ??
+                    '--',
+        _id: rule._id,
+        ruleType: rule.ruleType,
+        label: rule.label,
+        active: rule.active,
+        categoryKey: rule.categoryKey,
+        setKey: rule.setKey,
+        catalogProductKey: rule.catalogProductKey,
+        autoTrackFutureSets: rule.autoTrackFutureSets,
+        createdAt: rule.createdAt,
+        updatedAt: rule.updatedAt,
         activeSeriesCount: activeSeriesCounts.get(rule._id) ?? 0,
+        catalogSetSync: rule.setKey
+          ? summarizeCatalogSync(
+              [setCatalogData.get(rule.setKey)].filter(
+                (set): set is (typeof catalogSets)[number] => set != null,
+              ),
+            )
+          : rule.ruleType === 'category' && rule.categoryKey
+            ? summarizeCatalogSync(
+                catalogSets.filter((set) => categoryRuleAppliesToSet(rule, set)),
+              )
+            : undefined,
       }))
   },
 })
@@ -91,13 +238,17 @@ export const listRules = query({
 export const getPricingStats = query({
   args: {},
   handler: async (ctx) => {
+    const activeIssues = await ctx.db
+      .query('pricingResolutionIssues')
+      .withIndex('by_active', (q) => q.eq('active', true))
+      .collect()
+
     const [
       totalTrackedSeries,
       totalActiveTrackedSeries,
       totalRules,
       totalActiveRules,
       totalIssues,
-      totalActiveIssues,
     ] = await Promise.all([
       countDocuments(ctx.db.query('pricingTrackedSeries')),
       countDocuments(
@@ -112,11 +263,6 @@ export const getPricingStats = query({
           .withIndex('by_active', (q) => q.eq('active', true)),
       ),
       countDocuments(ctx.db.query('pricingResolutionIssues')),
-      countDocuments(
-        ctx.db
-          .query('pricingResolutionIssues')
-          .withIndex('by_active', (q) => q.eq('active', true)),
-      ),
     ])
 
     return {
@@ -125,7 +271,7 @@ export const getPricingStats = query({
       totalRules,
       totalActiveRules,
       totalIssues,
-      totalActiveIssues,
+      totalActiveIssues: activeIssues.filter((issue) => !issue.ignoredAt).length,
     }
   },
 })
@@ -271,6 +417,7 @@ export const listResolutionIssues = query({
     setKey: v.optional(v.string()),
     categoryKey: v.optional(v.string()),
     issueType: v.optional(pricingResolutionIssueTypeValidator),
+    includeIgnored: v.optional(v.boolean()),
     cursor: v.union(v.string(), v.null()),
     limit: v.optional(v.number()),
   },
@@ -295,6 +442,7 @@ export const listResolutionIssues = query({
       .filter((issue) =>
         args.issueType ? issue.issueType === args.issueType : true,
       )
+      .filter((issue) => (args.includeIgnored ? true : !issue.ignoredAt))
       .sort((left, right) => right.lastSeenAt - left.lastSeenAt)
 
     return paginateArray(filtered, args.cursor, clampLimit(args.limit))
@@ -333,7 +481,7 @@ export const listStaleTrackedSetKeys = internalQuery({
         continue
       }
 
-      if (set.syncStatus === 'syncing') {
+      if (set.syncStatus === 'syncing' || set.pricingSyncStatus === 'syncing') {
         continue
       }
 
@@ -357,5 +505,29 @@ export const listStaleTrackedSetKeys = internalQuery({
 
     staleSets.sort((left, right) => right.ageMs - left.ageMs)
     return staleSets.slice(0, maxResults)
+  },
+})
+
+export const getSetRuleScope = internalQuery({
+  args: {
+    setKey: v.string(),
+  },
+  handler: async (ctx, { setKey }) => {
+    const set = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!set) {
+      return {
+        setKey,
+        inRuleScope: false,
+      }
+    }
+
+    return {
+      setKey,
+      inRuleScope: await isSetInRuleScope(ctx, set),
+    }
   },
 })

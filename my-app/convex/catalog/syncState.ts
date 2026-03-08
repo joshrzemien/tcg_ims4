@@ -56,6 +56,15 @@ export function getSyncPriority(set: Doc<'catalogSets'>): number {
   return 2
 }
 
+export function needsRuleScopeCleanup(set: Doc<'catalogSets'>): boolean {
+  return (
+    typeof set.lastSyncedAt === 'number' ||
+    (typeof set.syncedProductCount === 'number' &&
+      set.syncedProductCount > 0) ||
+    (typeof set.syncedSkuCount === 'number' && set.syncedSkuCount > 0)
+  )
+}
+
 export function compareSyncCandidates(
   left: Doc<'catalogSets'>,
   right: Doc<'catalogSets'>,

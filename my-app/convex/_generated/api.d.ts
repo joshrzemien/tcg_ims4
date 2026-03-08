@@ -31,6 +31,7 @@ import type * as orders_types from "../orders/types.js";
 import type * as pricing_mutations from "../pricing/mutations.js";
 import type * as pricing_normalizers from "../pricing/normalizers.js";
 import type * as pricing_queries from "../pricing/queries.js";
+import type * as pricing_ruleScope from "../pricing/ruleScope.js";
 import type * as pricing_sync from "../pricing/sync.js";
 import type * as shipments_actions from "../shipments/actions.js";
 import type * as shipments_mutations from "../shipments/mutations.js";
@@ -71,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   "pricing/mutations": typeof pricing_mutations;
   "pricing/normalizers": typeof pricing_normalizers;
   "pricing/queries": typeof pricing_queries;
+  "pricing/ruleScope": typeof pricing_ruleScope;
   "pricing/sync": typeof pricing_sync;
   "shipments/actions": typeof shipments_actions;
   "shipments/mutations": typeof shipments_mutations;

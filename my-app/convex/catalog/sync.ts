@@ -345,6 +345,34 @@ async function cleanupSetSnapshot(
   }
 }
 
+async function purgeSetSnapshot(ctx: ActionCtx, setKey: string) {
+  let deletedProducts = 0
+  let deletedSkus = 0
+  let hasMoreProducts = true
+  let hasMoreSkus = true
+
+  while (hasMoreProducts || hasMoreSkus) {
+    const result = await ctx.runMutation(
+      internal.catalog.mutations.purgeSetSnapshot,
+      {
+        setKey,
+        productLimit: CLEANUP_PRODUCT_BATCH_SIZE,
+        skuLimit: CLEANUP_SKU_BATCH_SIZE,
+      },
+    )
+
+    deletedProducts += result.deletedProducts
+    deletedSkus += result.deletedSkus
+    hasMoreProducts = result.hasMoreProducts
+    hasMoreSkus = result.hasMoreSkus
+  }
+
+  return {
+    deletedProducts,
+    deletedSkus,
+  }
+}
+
 async function refreshCatalogMetadata(
   ctx: ActionCtx,
 ): Promise<MetadataRefreshResult> {
@@ -420,6 +448,13 @@ async function processSetSyncInternal(
 ): Promise<SyncSetSuccess> {
   const { setKey, mode } = params
   const set = await loadSetByKey(ctx, setKey)
+  const ruleScope = await ctx.runQuery(
+    internal.pricing.queries.getSetRuleScope,
+    {
+      setKey,
+    },
+  )
+  const setInRuleScope = ruleScope.inRuleScope
   const processedMode: SetSyncMode =
     mode === 'pricing_only' && typeof set.lastSyncedAt !== 'number'
       ? 'full'
@@ -433,7 +468,7 @@ async function processSetSyncInternal(
   let snapshots = { setKey, series: 0, insertedHistory: 0 }
 
   try {
-    if (processedMode === 'full') {
+    if (processedMode === 'full' && setInRuleScope) {
       const syncStartedAt = Date.now()
       await ctx.runMutation(internal.catalog.mutations.markSetSyncStarted, {
         setKey,
@@ -493,6 +528,12 @@ async function processSetSyncInternal(
             message,
           },
         )
+        await ctx.runMutation(internal.pricing.mutations.upsertSyncIssue, {
+          setKey,
+          failedAt,
+          message,
+          syncStage: 'catalog',
+        })
         throw error
       }
     }
@@ -524,6 +565,10 @@ async function processSetSyncInternal(
           completedAt,
         },
       )
+      await ctx.runMutation(internal.pricing.mutations.resolveSyncIssue, {
+        setKey,
+        resolvedAt: completedAt,
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const failedAt = Date.now()
@@ -532,7 +577,25 @@ async function processSetSyncInternal(
         failedAt,
         message,
       })
+      await ctx.runMutation(internal.pricing.mutations.upsertSyncIssue, {
+        setKey,
+        failedAt,
+        message,
+        syncStage: 'pricing',
+      })
       throw error
+    }
+
+    if (!setInRuleScope) {
+      cleanup = await purgeSetSnapshot(ctx, setKey)
+      productCount = 0
+      skuCount = 0
+      completedAt = Date.now()
+
+      await ctx.runMutation(internal.catalog.mutations.recordSetScopeCleanup, {
+        setKey,
+        cleanedAt: completedAt,
+      })
     }
   } finally {
     const pending = await ctx.runMutation(

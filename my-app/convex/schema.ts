@@ -56,6 +56,7 @@ const pricingResolutionIssueTypeValidator = v.union(
   v.literal('unmapped_printing'),
   v.literal('missing_product_price'),
   v.literal('missing_manapool_match'),
+  v.literal('sync_error'),
 )
 const shipmentSummaryValidator = v.object({
   _id: v.id('shipments'),
@@ -304,6 +305,7 @@ export default defineSchema({
     lastSeenAt: v.number(),
     occurrenceCount: v.number(),
     active: v.boolean(),
+    ignoredAt: v.optional(v.number()),
   })
     .index('by_key', ['key'])
     .index('by_active', ['active'])

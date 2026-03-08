@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { useMutation, useQuery } from 'convex/react'
+import { useAction, useMutation, useQuery } from 'convex/react'
 import {
   AlertTriangle,
   ChevronDown,
@@ -8,6 +8,7 @@ import {
   EyeOff,
   Layers,
   Plus,
+  RotateCw,
   Search,
   Trash2,
   TrendingUp,
@@ -33,7 +34,36 @@ import { cn } from '~/lib/utils'
 
 // -- Types --
 
-type TrackingRule = Doc<'pricingTrackingRules'> & { activeSeriesCount: number }
+type CatalogSetSync = {
+  pricingSyncStatus: string
+  pendingSyncMode?: string
+  scopedSetCount?: number
+  pendingSetCount?: number
+  syncingSetCount?: number
+  errorSetCount?: number
+  syncedProductCount?: number
+  syncedSkuCount?: number
+}
+
+type TrackingRule = {
+  _id: Id<'pricingTrackingRules'>
+  ruleType: 'manual_product' | 'set' | 'category'
+  categoryGroupKey: string
+  categoryGroupLabel: string
+  setGroupKey?: string
+  setGroupLabel?: string
+  scopeLabel: string
+  label: string
+  active: boolean
+  categoryKey?: string
+  setKey?: string
+  catalogProductKey?: string
+  autoTrackFutureSets?: boolean
+  createdAt: number
+  updatedAt: number
+  activeSeriesCount: number
+  catalogSetSync?: CatalogSetSync
+}
 type TrackedSeries = Doc<'pricingTrackedSeries'>
 type TabKey = 'rules' | 'series' | 'issues'
 
@@ -111,11 +141,23 @@ const pricingSourceStyles: Record<string, string> = {
   unavailable: 'border-red-500/20 bg-red-500/5 text-red-400',
 }
 
+const pricingSyncStatusStyles: Record<string, string> = {
+  idle: 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400',
+  syncing: 'border-blue-500/20 bg-blue-500/5 text-blue-400',
+  error: 'border-red-500/20 bg-red-500/5 text-red-400',
+}
+
+const syncModeStyles: Record<string, string> = {
+  full: 'border-amber-500/20 bg-amber-500/5 text-amber-400',
+  pricing_only: 'border-cyan-500/20 bg-cyan-500/5 text-cyan-400',
+}
+
 const issueTypeStyles: Record<string, string> = {
   ambiguous_nm_en_sku: 'border-amber-500/20 bg-amber-500/5 text-amber-400',
   unmapped_printing: 'border-orange-500/20 bg-orange-500/5 text-orange-400',
   missing_product_price: 'border-red-500/20 bg-red-500/5 text-red-400',
   missing_manapool_match: 'border-violet-500/20 bg-violet-500/5 text-violet-400',
+  sync_error: 'border-red-500/20 bg-red-500/5 text-red-400',
 }
 
 const issueTypeLabels: Record<string, string> = {
@@ -123,6 +165,7 @@ const issueTypeLabels: Record<string, string> = {
   unmapped_printing: 'Unmapped Printing',
   missing_product_price: 'Missing Price',
   missing_manapool_match: 'Missing Manapool',
+  sync_error: 'Sync Error',
 }
 
 // -- Shared Components --
@@ -327,12 +370,57 @@ function RulesTab({
     )
   }
 
+  const categoryGroups: Array<{
+    key: string
+    label: string
+    categoryRules: Array<TrackingRule>
+    setGroups: Array<{
+      key: string
+      label: string
+      rules: Array<TrackingRule>
+    }>
+  }> = []
+
+  for (const rule of rules) {
+    let categoryGroup = categoryGroups.find(
+      (group) => group.key === rule.categoryGroupKey,
+    )
+    if (!categoryGroup) {
+      categoryGroup = {
+        key: rule.categoryGroupKey,
+        label: rule.categoryGroupLabel,
+        categoryRules: [],
+        setGroups: [],
+      }
+      categoryGroups.push(categoryGroup)
+    }
+
+    if (rule.ruleType === 'category' || !rule.setGroupKey) {
+      categoryGroup.categoryRules.push(rule)
+      continue
+    }
+
+    const existingSetGroup = categoryGroup.setGroups.find(
+      (group) => group.key === rule.setGroupKey,
+    )
+    if (existingSetGroup) {
+      existingSetGroup.rules.push(rule)
+      continue
+    }
+
+    categoryGroup.setGroups.push({
+      key: rule.setGroupKey,
+      label: rule.setGroupLabel ?? rule.setGroupKey,
+      rules: [rule],
+    })
+  }
+
   return (
     <div className="overflow-x-auto rounded border bg-card">
-      <Table className="min-w-[700px]">
+      <Table className="min-w-[900px]">
         <TableHeader className="sticky top-0 z-10 bg-card">
           <TableRow className="border-border/50 hover:bg-transparent">
-            {['Label', 'Type', 'Status', 'Scope', 'Series', 'Created', 'Actions'].map(
+            {['Label', 'Type', 'Status', 'Scope', 'Series', 'Pricing Sync', 'Created', 'Actions'].map(
               (h) => (
                 <TableHead
                   key={h}
@@ -348,103 +436,364 @@ function RulesTab({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rules.map((rule, i) => (
+          {categoryGroups.flatMap((categoryGroup, categoryIndex) => [
             <TableRow
-              key={rule._id}
+              key={`category:${categoryGroup.key}`}
               className={cn(
-                'border-border/30',
-                i % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
+                'border-border/40 bg-muted/10 hover:bg-muted/10',
+                categoryIndex > 0 && 'border-t-2',
               )}
             >
-              <TableCell className="px-2 py-1.5">
-                <span className="text-xs font-medium text-foreground">
-                  {rule.label}
-                </span>
-              </TableCell>
-              <TableCell className="px-2 py-1.5">
-                <Badge
-                  className={
-                    ruleTypeStyles[rule.ruleType] ??
-                    'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                  }
-                >
-                  {humanize(rule.ruleType)}
-                </Badge>
-              </TableCell>
-              <TableCell className="px-2 py-1.5">
-                <Badge
-                  className={
-                    rule.active
-                      ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
-                      : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                  }
-                >
-                  {rule.active ? 'Active' : 'Paused'}
-                </Badge>
-              </TableCell>
-              <TableCell className="px-2 py-1.5">
-                <span className="font-mono text-[10px] text-muted-foreground">
-                  {rule.catalogProductKey ??
-                    rule.setKey ??
-                    rule.categoryKey ??
-                    '--'}
-                </span>
-              </TableCell>
-              <TableCell className="px-2 py-1.5 text-right">
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {rule.activeSeriesCount.toLocaleString()}
-                </span>
-              </TableCell>
-              <TableCell className="px-2 py-1.5">
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {formatDate(rule.createdAt)}
-                </span>
-              </TableCell>
-              <TableCell className="px-2 py-1.5">
-                <div className="flex items-center gap-1">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => void handleToggle(rule)}
-                        disabled={
-                          togglingId === rule._id || deletingId === rule._id
-                        }
+              <TableCell colSpan={8} className="px-2 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <Badge
+                        className="border-orange-500/20 bg-orange-500/5 text-orange-400"
                       >
-                        {rule.active ? (
-                          <EyeOff className="size-3" />
-                        ) : (
-                          <Eye className="size-3" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {rule.active ? 'Pause rule' : 'Activate rule'}
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        className="text-red-400 hover:text-red-300"
-                        onClick={() => void handleDelete(rule)}
-                        disabled={
-                          deletingId === rule._id || togglingId === rule._id
-                        }
-                      >
-                        <Trash2 className="size-3" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Delete rule</TooltipContent>
-                  </Tooltip>
+                        category
+                      </Badge>
+                      <span className="truncate text-xs font-semibold text-foreground">
+                        {categoryGroup.label}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">
+                      {(
+                        categoryGroup.categoryRules.length +
+                        categoryGroup.setGroups.reduce(
+                          (sum, setGroup) => sum + setGroup.rules.length,
+                          0,
+                        )
+                      ).toLocaleString()}{' '}
+                      rule
+                      {categoryGroup.categoryRules.length +
+                        categoryGroup.setGroups.reduce(
+                          (sum, setGroup) => sum + setGroup.rules.length,
+                          0,
+                        ) === 1
+                        ? ''
+                        : 's'}
+                    </p>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">
+                    {[
+                      ...categoryGroup.categoryRules,
+                      ...categoryGroup.setGroups.flatMap((setGroup) => setGroup.rules),
+                    ]
+                      .reduce((sum, rule) => sum + rule.activeSeriesCount, 0)
+                      .toLocaleString()}{' '}
+                    series
+                  </span>
                 </div>
               </TableCell>
-            </TableRow>
-          ))}
+            </TableRow>,
+            ...categoryGroup.categoryRules.map((rule, ruleIndex) => (
+              <TableRow
+                key={rule._id}
+                className={cn(
+                  'border-border/30',
+                  ruleIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
+                )}
+              >
+                <TableCell className="px-2 py-1.5">
+                  <span className="text-xs font-medium text-foreground">
+                    {rule.label}
+                  </span>
+                </TableCell>
+                <TableCell className="px-2 py-1.5">
+                  <Badge
+                    className={
+                      ruleTypeStyles[rule.ruleType] ??
+                      'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                    }
+                  >
+                    {humanize(rule.ruleType)}
+                  </Badge>
+                </TableCell>
+                <TableCell className="px-2 py-1.5">
+                  <Badge
+                    className={
+                      rule.active
+                        ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
+                        : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                    }
+                  >
+                    {rule.active ? 'Active' : 'Paused'}
+                  </Badge>
+                </TableCell>
+                <TableCell className="px-2 py-1.5">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-muted-foreground">
+                      {rule.scopeLabel}
+                    </span>
+                    {rule.ruleType === 'category' && (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge
+                          className={
+                            rule.autoTrackFutureSets !== false
+                              ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-400'
+                              : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                          }
+                        >
+                          {rule.autoTrackFutureSets !== false
+                            ? 'auto add new sets'
+                            : 'no auto add'}
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell className="px-2 py-1.5 text-right">
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {rule.activeSeriesCount.toLocaleString()}
+                  </span>
+                </TableCell>
+                <TableCell className="px-2 py-1.5">
+                  {rule.catalogSetSync ? (
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1">
+                        <Badge
+                          className={
+                            pricingSyncStatusStyles[rule.catalogSetSync.pricingSyncStatus] ??
+                            pricingSyncStatusStyles.idle
+                          }
+                        >
+                          {humanize(rule.catalogSetSync.pricingSyncStatus)}
+                        </Badge>
+                        {rule.catalogSetSync.pendingSyncMode && (
+                          <Badge
+                            className={
+                              syncModeStyles[rule.catalogSetSync.pendingSyncMode] ??
+                              'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                            }
+                          >
+                            pending {humanize(rule.catalogSetSync.pendingSyncMode)}
+                          </Badge>
+                        )}
+                        {rule.ruleType === 'category' &&
+                          !rule.catalogSetSync.pendingSyncMode &&
+                          (rule.catalogSetSync.pendingSetCount ?? 0) > 0 && (
+                            <Badge className="border-zinc-500/20 bg-zinc-500/5 text-zinc-400">
+                              {rule.catalogSetSync.pendingSetCount} pending
+                            </Badge>
+                          )}
+                      </div>
+                      <span className="text-[10px] tabular-nums text-muted-foreground">
+                        {rule.ruleType === 'category'
+                          ? `${rule.catalogSetSync.scopedSetCount?.toLocaleString() ?? 0} sets`
+                          : `${rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products / ${rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus`}
+                        {rule.ruleType === 'category' && (
+                          <>
+                            {' · '}
+                            {rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products
+                            {' · '}
+                            {rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-[10px] text-muted-foreground">--</span>
+                  )}
+                </TableCell>
+                <TableCell className="px-2 py-1.5">
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {formatDate(rule.createdAt)}
+                  </span>
+                </TableCell>
+                <TableCell className="px-2 py-1.5">
+                  <div className="flex items-center gap-1">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => void handleToggle(rule)}
+                          disabled={
+                            togglingId === rule._id || deletingId === rule._id
+                          }
+                        >
+                          {rule.active ? (
+                            <EyeOff className="size-3" />
+                          ) : (
+                            <Eye className="size-3" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {rule.active ? 'Pause rule' : 'Activate rule'}
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="text-red-400 hover:text-red-300"
+                          onClick={() => void handleDelete(rule)}
+                          disabled={
+                            deletingId === rule._id || togglingId === rule._id
+                          }
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete rule</TooltipContent>
+                    </Tooltip>
+                  </div>
+                </TableCell>
+              </TableRow>
+            )),
+            ...categoryGroup.setGroups.flatMap((setGroup) => [
+              <TableRow
+                key={`set:${categoryGroup.key}:${setGroup.key}`}
+                className="border-border/20 bg-muted/5 hover:bg-muted/5"
+              >
+                <TableCell colSpan={8} className="px-2 py-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex items-center gap-1.5">
+                      <Badge className="border-violet-500/20 bg-violet-500/5 text-violet-400">
+                        set
+                      </Badge>
+                      <span className="truncate text-[10px] font-medium text-foreground">
+                        {setGroup.label}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">
+                      {setGroup.rules.length} rule{setGroup.rules.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                </TableCell>
+              </TableRow>,
+              ...setGroup.rules.map((rule, ruleIndex) => (
+                <TableRow
+                  key={rule._id}
+                  className={cn(
+                    'border-border/30',
+                    ruleIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
+                  )}
+                >
+                  <TableCell className="px-2 py-1.5">
+                    <span className="text-xs font-medium text-foreground">
+                      {rule.label}
+                    </span>
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5">
+                    <Badge
+                      className={
+                        ruleTypeStyles[rule.ruleType] ??
+                        'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                      }
+                    >
+                      {humanize(rule.ruleType)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5">
+                    <Badge
+                      className={
+                        rule.active
+                          ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
+                          : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                      }
+                    >
+                      {rule.active ? 'Active' : 'Paused'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5">
+                    <span className="text-[10px] text-muted-foreground">
+                      {rule.scopeLabel}
+                    </span>
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5 text-right">
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {rule.activeSeriesCount.toLocaleString()}
+                    </span>
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5">
+                    {rule.catalogSetSync ? (
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-1">
+                          <Badge
+                            className={
+                              pricingSyncStatusStyles[rule.catalogSetSync.pricingSyncStatus] ??
+                              pricingSyncStatusStyles.idle
+                            }
+                          >
+                            {humanize(rule.catalogSetSync.pricingSyncStatus)}
+                          </Badge>
+                          {rule.catalogSetSync.pendingSyncMode && (
+                            <Badge
+                              className={
+                                syncModeStyles[rule.catalogSetSync.pendingSyncMode] ??
+                                'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                              }
+                            >
+                              pending {humanize(rule.catalogSetSync.pendingSyncMode)}
+                            </Badge>
+                          )}
+                        </div>
+                        <span className="text-[10px] tabular-nums text-muted-foreground">
+                          {`${rule.catalogSetSync.syncedProductCount?.toLocaleString() ?? 0} products / ${rule.catalogSetSync.syncedSkuCount?.toLocaleString() ?? 0} skus`}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">--</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5">
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {formatDate(rule.createdAt)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5">
+                    <div className="flex items-center gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => void handleToggle(rule)}
+                            disabled={
+                              togglingId === rule._id || deletingId === rule._id
+                            }
+                          >
+                            {rule.active ? (
+                              <EyeOff className="size-3" />
+                            ) : (
+                              <Eye className="size-3" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {rule.active ? 'Pause rule' : 'Activate rule'}
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="text-red-400 hover:text-red-300"
+                            onClick={() => void handleDelete(rule)}
+                            disabled={
+                              deletingId === rule._id || togglingId === rule._id
+                            }
+                          >
+                            <Trash2 className="size-3" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Delete rule</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )),
+            ]),
+          ])}
         </TableBody>
       </Table>
     </div>
@@ -817,20 +1166,41 @@ function SeriesHistoryPanel({ seriesKey }: { seriesKey: string }) {
 
 // -- Issues Tab --
 
-function IssuesTab() {
+function IssuesTab({ onFlash }: { onFlash: (msg: FlashMessage) => void }) {
   const [activeOnly, setActiveOnly] = useState(true)
+  const [includeIgnored, setIncludeIgnored] = useState(false)
   const [issueTypeFilter, setIssueTypeFilter] = useState<string | undefined>()
   const [cursor, setCursor] = useState<string | null>(null)
+  const [ignoringId, setIgnoringId] = useState<Id<'pricingResolutionIssues'> | null>(
+    null,
+  )
+  const setIssueIgnored = useMutation(api.pricing.mutations.setIssueIgnored)
 
   const issuesPage = useQuery(api.pricing.queries.listResolutionIssues, {
     activeOnly,
     issueType: issueTypeFilter as any,
+    includeIgnored,
     cursor,
     limit: 50,
   })
 
   const issues = issuesPage?.page ?? []
   const hasMore = issuesPage ? !issuesPage.isDone : false
+
+  async function handleIgnore(issueId: Id<'pricingResolutionIssues'>, ignored: boolean) {
+    setIgnoringId(issueId)
+    try {
+      await setIssueIgnored({ issueId, ignored })
+      onFlash({
+        kind: 'success',
+        text: ignored ? 'Issue ignored.' : 'Issue restored.',
+      })
+    } catch (error) {
+      onFlash({ kind: 'error', text: getErrorMessage(error) })
+    } finally {
+      setIgnoringId(null)
+    }
+  }
 
   if (!issuesPage) return <LoadingSkeleton />
 
@@ -853,12 +1223,28 @@ function IssuesTab() {
         >
           Active Only
         </button>
+        <button
+          type="button"
+          className={cn(
+            'rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+            includeIgnored
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+          )}
+          onClick={() => {
+            setIncludeIgnored(!includeIgnored)
+            setCursor(null)
+          }}
+        >
+          Show Ignored
+        </button>
         {[
           ['all', 'All Types'],
           ['ambiguous_nm_en_sku', 'Ambiguous SKU'],
           ['unmapped_printing', 'Unmapped'],
           ['missing_product_price', 'Missing Price'],
           ['missing_manapool_match', 'No Manapool'],
+          ['sync_error', 'Sync Error'],
         ].map(([value, label]) => (
           <button
             key={value}
@@ -889,7 +1275,7 @@ function IssuesTab() {
           <Table className="min-w-[800px]">
             <TableHeader className="sticky top-0 z-10 bg-card">
               <TableRow className="border-border/50 hover:bg-transparent">
-                {['Issue', 'Series', 'Set', 'Status', 'Occurrences', 'Last Seen'].map(
+                {['Issue', 'Series', 'Set', 'Status', 'Occurrences', 'Last Seen', 'Actions'].map(
                   (h) => (
                     <TableHead
                       key={h}
@@ -914,35 +1300,55 @@ function IssuesTab() {
                   )}
                 >
                   <TableCell className="px-2 py-1.5">
-                    <Badge
-                      className={
-                        issueTypeStyles[issue.issueType] ??
-                        'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
-                      }
-                    >
-                      {issueTypeLabels[issue.issueType] ??
-                        humanize(issue.issueType)}
-                    </Badge>
+                    <div className="flex max-w-[24rem] flex-col gap-1">
+                      <Badge
+                        className={
+                          issueTypeStyles[issue.issueType] ??
+                          'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                        }
+                      >
+                        {issueTypeLabels[issue.issueType] ??
+                          humanize(issue.issueType)}
+                      </Badge>
+                      {typeof issue.details?.message === 'string' && (
+                        <span className="text-[10px] leading-relaxed text-muted-foreground">
+                          {issue.details.message}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="px-2 py-1.5">
                     <span className="font-mono text-[10px] text-muted-foreground">
-                      {issue.seriesKey}
+                      {issue.seriesKey || '--'}
                     </span>
                   </TableCell>
                   <TableCell className="px-2 py-1.5">
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {issue.setKey}
-                    </span>
+                    <div className="flex max-w-[18rem] flex-col gap-1">
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        {issue.setKey}
+                      </span>
+                      {typeof issue.details?.setName === 'string' && (
+                        <span className="text-[10px] text-foreground">
+                          {issue.details.setName}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="px-2 py-1.5">
                     <Badge
                       className={
-                        issue.active
+                        issue.ignoredAt
+                          ? 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                          : issue.active
                           ? 'border-red-500/20 bg-red-500/5 text-red-400'
                           : 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
                       }
                     >
-                      {issue.active ? 'Active' : 'Resolved'}
+                      {issue.ignoredAt
+                        ? 'Ignored'
+                        : issue.active
+                          ? 'Active'
+                          : 'Resolved'}
                     </Badge>
                   </TableCell>
                   <TableCell className="px-2 py-1.5 text-right">
@@ -961,6 +1367,19 @@ function IssuesTab() {
                         {formatDateTime(issue.lastSeenAt)}
                       </TooltipContent>
                     </Tooltip>
+                  </TableCell>
+                  <TableCell className="px-2 py-1.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() =>
+                        void handleIgnore(issue._id, !issue.ignoredAt)
+                      }
+                      disabled={ignoringId === issue._id}
+                    >
+                      {issue.ignoredAt ? 'Unignore' : 'Ignore'}
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -1213,6 +1632,38 @@ function CreateRuleModal({
                 ))}
               </select>
             )}
+            {/* Sync status detail for selected set */}
+            {keyValue && sets && (() => {
+              const selected = sets.find((s) => s.key === keyValue)
+              if (!selected) return null
+              return (
+                <div className="flex items-center gap-2 rounded border border-border/50 bg-muted/5 px-2 py-1.5">
+                  <Badge
+                    className={
+                      pricingSyncStatusStyles[selected.pricingSyncStatus] ??
+                      pricingSyncStatusStyles.idle
+                    }
+                  >
+                    pricing {humanize(selected.pricingSyncStatus)}
+                  </Badge>
+                  {selected.pendingSyncMode && (
+                    <Badge
+                      className={
+                        syncModeStyles[selected.pendingSyncMode] ??
+                        'border-zinc-500/20 bg-zinc-500/5 text-zinc-400'
+                      }
+                    >
+                      pending {humanize(selected.pendingSyncMode)}
+                    </Badge>
+                  )}
+                  <span className="text-[10px] tabular-nums text-muted-foreground">
+                    {selected.syncedProductCount?.toLocaleString() ?? 0} / {selected.productCount.toLocaleString()} products
+                    {' · '}
+                    {selected.syncedSkuCount?.toLocaleString() ?? 0} / {selected.skuCount.toLocaleString()} skus synced
+                  </span>
+                </div>
+              )
+            })()}
           </div>
         )}
 
@@ -1288,13 +1739,33 @@ export function PricingDashboard() {
   const [activeTab, setActiveTab] = useState<TabKey>('rules')
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [syncingCatalog, setSyncingCatalog] = useState(false)
 
   const rules = useQuery(api.pricing.queries.listRules)
   const pricingStats = useQuery(api.pricing.queries.getPricingStats)
+  const syncCatalogNow = useAction(api.catalog.sync.syncCatalogNow)
 
   const handleFlash = useCallback((msg: FlashMessage) => {
     setFlashMessage(msg)
   }, [])
+
+  async function handleSyncCatalogNow() {
+    setSyncingCatalog(true)
+    try {
+      const result = await syncCatalogNow({})
+      handleFlash({
+        kind: 'success',
+        text:
+          result.scheduled > 0
+            ? `Catalog sync queued for ${result.scheduled} set${result.scheduled === 1 ? '' : 's'}.`
+            : 'Catalog sync ran, but no eligible sets needed queueing.',
+      })
+    } catch (error) {
+      handleFlash({ kind: 'error', text: getErrorMessage(error) })
+    } finally {
+      setSyncingCatalog(false)
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -1331,16 +1802,31 @@ export function PricingDashboard() {
           ))}
         </div>
 
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          className="gap-1"
-          onClick={() => setShowCreateModal(true)}
-        >
-          <Plus className="size-3" />
-          New Rule
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            className="gap-1"
+            onClick={() => void handleSyncCatalogNow()}
+            disabled={syncingCatalog}
+          >
+            <RotateCw
+              className={cn('size-3', syncingCatalog && 'animate-spin')}
+            />
+            {syncingCatalog ? 'Syncing...' : 'Sync Catalog Now'}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            className="gap-1"
+            onClick={() => setShowCreateModal(true)}
+          >
+            <Plus className="size-3" />
+            New Rule
+          </Button>
+        </div>
       </div>
 
       {/* Tab content */}
@@ -1348,7 +1834,7 @@ export function PricingDashboard() {
         <RulesTab rules={rules} onFlash={handleFlash} />
       )}
       {activeTab === 'series' && <SeriesTab onFlash={handleFlash} />}
-      {activeTab === 'issues' && <IssuesTab />}
+      {activeTab === 'issues' && <IssuesTab onFlash={handleFlash} />}
 
       {/* Create Rule Modal */}
       {showCreateModal && (

@@ -7,23 +7,15 @@ import {
   getTrackedPrintingDefinitions,
   resolveSeriesSnapshot,
 } from './normalizers'
+import { categoryRuleAppliesToSet } from './ruleScope'
 import type { Doc, Id } from '../_generated/dataModel'
 
 type TrackingRuleDoc = Doc<'pricingTrackingRules'>
 type CatalogSetDoc = Doc<'catalogSets'>
 type PricingMutationCtx = any
 
-function categoryRuleAppliesToSet(rule: TrackingRuleDoc, set: CatalogSetDoc) {
-  if (rule.ruleType !== 'category' || rule.categoryKey !== set.categoryKey) {
-    return false
-  }
-
-  const setExistedBeforeRule = set._creationTime < rule.createdAt
-  if (setExistedBeforeRule) {
-    return rule.seedExistingSets !== false
-  }
-
-  return rule.autoTrackFutureSets !== false
+function buildSyncIssueKey(setKey: string) {
+  return `sync:${setKey}`
 }
 
 async function loadRelevantRulesForSet(
@@ -529,6 +521,7 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
             lastSeenAt: capturedAt,
             occurrenceCount: 1,
             active: true,
+            ignoredAt: undefined,
           })
         }
       }
@@ -601,6 +594,170 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
       setKey,
       series: seriesRows.length,
       insertedHistory,
+    }
+  },
+})
+
+export const upsertSyncIssue = internalMutation({
+  args: {
+    setKey: v.string(),
+    failedAt: v.number(),
+    message: v.string(),
+    syncStage: v.union(v.literal('catalog'), v.literal('pricing')),
+  },
+  handler: async (ctx, { setKey, failedAt, message, syncStage }) => {
+    const set = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!set) {
+      throw new Error(`Catalog set not found: ${setKey}`)
+    }
+
+    const key = buildSyncIssueKey(setKey)
+    const existing = await ctx.db
+      .query('pricingResolutionIssues')
+      .withIndex('by_key', (q) => q.eq('key', key))
+      .unique()
+
+    const details = {
+      setName: set.name,
+      message,
+      syncStage,
+      syncStatus: set.syncStatus,
+      pricingSyncStatus: set.pricingSyncStatus,
+    }
+
+    if (existing) {
+      await ctx.db.patch('pricingResolutionIssues', existing._id, {
+        details,
+        lastSeenAt: failedAt,
+        occurrenceCount: existing.occurrenceCount + 1,
+        active: true,
+      })
+
+      return { key, updated: true }
+    }
+
+    await ctx.db.insert('pricingResolutionIssues', {
+      key,
+      catalogProductKey: '',
+      seriesKey: '',
+      setKey: set.key,
+      categoryKey: set.categoryKey,
+      issueType: 'sync_error',
+      details,
+      firstSeenAt: failedAt,
+      lastSeenAt: failedAt,
+      occurrenceCount: 1,
+      active: true,
+      ignoredAt: undefined,
+    })
+
+    return { key, updated: false }
+  },
+})
+
+export const resolveSyncIssue = internalMutation({
+  args: {
+    setKey: v.string(),
+    resolvedAt: v.number(),
+  },
+  handler: async (ctx, { setKey, resolvedAt }) => {
+    const key = buildSyncIssueKey(setKey)
+    const existing = await ctx.db
+      .query('pricingResolutionIssues')
+      .withIndex('by_key', (q) => q.eq('key', key))
+      .unique()
+
+    if (!existing || !existing.active) {
+      return { key, resolved: false }
+    }
+
+    await ctx.db.patch('pricingResolutionIssues', existing._id, {
+      active: false,
+      lastSeenAt: resolvedAt,
+    })
+
+    return { key, resolved: true }
+  },
+})
+
+export const backfillSyncIssues = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const erroredSets = await ctx.db.query('catalogSets').collect()
+    let insertedOrUpdated = 0
+
+    for (const set of erroredSets) {
+      if (set.syncStatus !== 'error' && set.pricingSyncStatus !== 'error') {
+        continue
+      }
+
+      const key = buildSyncIssueKey(set.key)
+      const existing = await ctx.db
+        .query('pricingResolutionIssues')
+        .withIndex('by_key', (q) => q.eq('key', key))
+        .unique()
+
+      const details = {
+        setName: set.name,
+        message: set.lastPricingSyncError ?? set.lastSyncError ?? 'Unknown sync error',
+        syncStage:
+          set.pricingSyncStatus === 'error' ? 'pricing' : 'catalog',
+        syncStatus: set.syncStatus,
+        pricingSyncStatus: set.pricingSyncStatus,
+      }
+
+      if (existing) {
+        await ctx.db.patch('pricingResolutionIssues', existing._id, {
+          details,
+          lastSeenAt: set.updatedAt,
+          active: true,
+        })
+      } else {
+        await ctx.db.insert('pricingResolutionIssues', {
+          key,
+          catalogProductKey: '',
+          seriesKey: '',
+          setKey: set.key,
+          categoryKey: set.categoryKey,
+          issueType: 'sync_error',
+          details,
+          firstSeenAt: set.updatedAt,
+          lastSeenAt: set.updatedAt,
+          occurrenceCount: set.consecutiveSyncFailures ?? 1,
+          active: true,
+          ignoredAt: undefined,
+        })
+      }
+
+      insertedOrUpdated += 1
+    }
+
+    return { insertedOrUpdated }
+  },
+})
+
+export const setIssueIgnored = mutation({
+  args: {
+    issueId: v.id('pricingResolutionIssues'),
+    ignored: v.boolean(),
+  },
+  handler: async (ctx, { issueId, ignored }) => {
+    const issue = await ctx.db.get('pricingResolutionIssues', issueId)
+    if (!issue) {
+      throw new Error(`Pricing issue not found: ${issueId}`)
+    }
+
+    await ctx.db.patch('pricingResolutionIssues', issueId, {
+      ignoredAt: ignored ? Date.now() : undefined,
+    })
+
+    return {
+      issueId,
+      ignored,
     }
   },
 })

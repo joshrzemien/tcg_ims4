@@ -42,9 +42,33 @@ export type ResolvedSeriesSnapshot = {
   issues: Array<PricingResolutionIssue>
 }
 
-const SKU_VARIANT_CODE_BY_PRINTING_KEY: Record<string, string> = {
+const DEFAULT_SKU_VARIANT_CODE_BY_PRINTING_KEY: Record<string, string> = {
   normal: 'N',
   foil: 'F',
+}
+
+const SKU_VARIANT_CODE_BY_CATEGORY_ID: Partial<
+  Record<number, Partial<Record<string, string>>>
+> = {
+  3: {
+    normal: 'N',
+    holofoil: 'H',
+    reverse_holofoil: 'RH',
+  },
+  62: {
+    cold_foil: 'CF',
+    rainbow_foil: 'RF',
+  },
+}
+
+function resolveSkuVariantCode(
+  tcgtrackingCategoryId: number,
+  printingKey: string,
+): string | undefined {
+  return (
+    SKU_VARIANT_CODE_BY_CATEGORY_ID[tcgtrackingCategoryId]?.[printingKey] ??
+    DEFAULT_SKU_VARIANT_CODE_BY_PRINTING_KEY[printingKey]
+  )
 }
 
 function toOptionalCents(value: unknown): number | undefined {
@@ -148,7 +172,10 @@ export function getTrackedPrintingDefinitions(
     definitions.set(printingKey, {
       printingKey,
       printingLabel,
-      skuVariantCode: SKU_VARIANT_CODE_BY_PRINTING_KEY[printingKey],
+      skuVariantCode: resolveSkuVariantCode(
+        product.tcgtrackingCategoryId,
+        printingKey,
+      ),
       tcgMarketPriceCents: toOptionalCents(printingValue.market),
       tcgLowPriceCents: toOptionalCents(printingValue.low),
       tcgHighPriceCents: toOptionalCents(printingValue.high),

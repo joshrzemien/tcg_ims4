@@ -1,11 +1,13 @@
 import { v } from 'convex/values'
 import { internalMutation } from '../_generated/server'
+import { listRuleScopedSetKeys } from '../pricing/ruleScope'
 import { getAllowedCatalogCategoryIds } from './config'
 import { pickHigherPrioritySyncMode } from './syncModes'
 import {
   compareSyncCandidates,
   getSyncPriority,
   isSyncCandidateEligible,
+  needsRuleScopeCleanup,
 } from './syncState'
 
 const SYNC_RETRY_BACKOFF_MS = [
@@ -667,6 +669,73 @@ export const clearStuckSyncs = internalMutation({
   },
 })
 
+export const recordSetScopeCleanup = internalMutation({
+  args: {
+    setKey: v.string(),
+    cleanedAt: v.number(),
+  },
+  handler: async (ctx, { setKey, cleanedAt }) => {
+    const existing = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!existing) {
+      throw new Error(`Catalog set not found: ${setKey}`)
+    }
+
+    await ctx.db.patch('catalogSets', existing._id, {
+      syncStatus: 'ready',
+      currentSyncStartedAt: undefined,
+      lastSyncedAt: undefined,
+      lastSyncError: undefined,
+      nextSyncAttemptAt: undefined,
+      consecutiveSyncFailures: undefined,
+      syncedProductCount: 0,
+      syncedSkuCount: 0,
+      updatedAt: cleanedAt,
+    })
+  },
+})
+
+export const purgeSetSnapshot = internalMutation({
+  args: {
+    setKey: v.string(),
+    productLimit: v.number(),
+    skuLimit: v.number(),
+  },
+  handler: async (ctx, { setKey, productLimit, skuLimit }) => {
+    const products = await ctx.db
+      .query('catalogProducts')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .take(productLimit)
+    const skus = await ctx.db
+      .query('catalogSkus')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .take(skuLimit)
+
+    let deletedProducts = 0
+    let deletedSkus = 0
+
+    for (const product of products) {
+      await ctx.db.delete('catalogProducts', product._id)
+      deletedProducts += 1
+    }
+
+    for (const sku of skus) {
+      await ctx.db.delete('catalogSkus', sku._id)
+      deletedSkus += 1
+    }
+
+    return {
+      deletedProducts,
+      deletedSkus,
+      hasMoreProducts: products.length === productLimit,
+      hasMoreSkus: skus.length === skuLimit,
+    }
+  },
+})
+
 export const claimSyncCandidates = internalMutation({
   args: {
     limit: v.number(),
@@ -676,9 +745,27 @@ export const claimSyncCandidates = internalMutation({
     const allowedCategoryIds = getAllowedCatalogCategoryIds()
     const now = Date.now()
     const sets = await ctx.db.query('catalogSets').collect()
-    const candidates = sets
+    const ruleScopedSetKeys = await listRuleScopedSetKeys(ctx, { sets })
+    const cleanupCandidates = sets
+      .filter(
+        (set) =>
+          !ruleScopedSetKeys.has(set.key) &&
+          set.syncStatus !== 'syncing' &&
+          set.pricingSyncStatus !== 'syncing' &&
+          needsRuleScopeCleanup(set),
+      )
+      .sort(
+        (left, right) => (right.lastSyncedAt ?? 0) - (left.lastSyncedAt ?? 0),
+      )
+    const inScopeCandidates = sets
+      .filter((set) => ruleScopedSetKeys.has(set.key))
       .filter((set) => isSyncCandidateEligible(set, now, allowedCategoryIds))
       .sort(compareSyncCandidates)
+    const candidates = [...cleanupCandidates, ...inScopeCandidates]
+      .filter(
+        (set, index, all) =>
+          all.findIndex((entry) => entry.key === set.key) === index,
+      )
       .slice(0, maxResults)
 
     for (const candidate of candidates) {
