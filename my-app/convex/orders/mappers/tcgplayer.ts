@@ -1,4 +1,7 @@
-import { normalizeShippingStatus } from '../../utils/shippingStatus'
+import {
+  normalizeShippingStatus,
+  normalizeStatusToken,
+} from '../../utils/shippingStatus'
 import { deriveTcgplayerShippingMethod } from '../../../shared/shippingMethod'
 import {
   dollarsToCents,
@@ -44,8 +47,17 @@ export interface TcgplayerOrderDetail {
   createdAt?: string
 }
 
+function normalizeTcgplayerOrderStatus(status: unknown) {
+  const normalized = normalizeStatusToken(status)
+  if (normalized === 'processing' || normalized === 'ready_to_ship') {
+    return 'pending' as const
+  }
+
+  return normalizeShippingStatus(status ?? 'pending')
+}
+
 export function mapTcgplayerOrder(order: TcgplayerOrderDetail): OrderRecord {
-  const platformStatus = normalizeShippingStatus(order.status ?? 'pending')
+  const platformStatus = normalizeTcgplayerOrderStatus(order.status)
   const tx = order.transaction ?? {}
   const addr = order.shippingAddress ?? {}
   const totalAmountCents = dollarsToCents(tx.grossAmount ?? order.totalAmount)

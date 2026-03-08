@@ -3,6 +3,54 @@ import { describe, expect, it, vi } from 'vitest'
 import { mapTcgplayerOrder } from '../../../../../convex/orders/mappers/tcgplayer'
 
 describe('convex/orders/mappers/tcgplayer', () => {
+  it('maps untouched TCGplayer Processing orders to the canonical pending state', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-08T12:34:56.000Z'))
+
+    const order = mapTcgplayerOrder({
+      orderNumber: '1000',
+      buyerName: 'Ada Lovelace',
+      status: 'Processing',
+      createdAt: '2026-03-01T00:00:00.000Z',
+    })
+
+    expect(order.status).toBe('pending')
+    expect(order.shippingStatus).toBe('pending')
+    expect(order.isFulfilled).toBe(false)
+  })
+
+  it('maps untouched TCGplayer ReadyToShip orders to the canonical pending state', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-08T12:34:56.000Z'))
+
+    const order = mapTcgplayerOrder({
+      orderNumber: '1000',
+      buyerName: 'Ada Lovelace',
+      status: 'ReadyToShip',
+      createdAt: '2026-03-01T00:00:00.000Z',
+    })
+
+    expect(order.status).toBe('pending')
+    expect(order.shippingStatus).toBe('pending')
+    expect(order.isFulfilled).toBe(false)
+  })
+
+  it('keeps active TCGplayer fulfillment states mapped to processing', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-08T12:34:56.000Z'))
+
+    const order = mapTcgplayerOrder({
+      orderNumber: '1000',
+      buyerName: 'Ada Lovelace',
+      status: 'Pulling',
+      createdAt: '2026-03-01T00:00:00.000Z',
+    })
+
+    expect(order.status).toBe('processing')
+    expect(order.shippingStatus).toBe('processing')
+    expect(order.isFulfilled).toBe(false)
+  })
+
   it('maps TCGplayer orders into the internal order record shape', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-08T12:34:56.000Z'))
