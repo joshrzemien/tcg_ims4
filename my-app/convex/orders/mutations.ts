@@ -31,27 +31,38 @@ function normalizeProductId(productId: string | undefined): number | undefined {
   return Number.isFinite(numericValue) ? numericValue : undefined
 }
 
-async function enrichOrderItemsWithCatalogLinks(
+function distinctCatalogLookupKeys(items: Array<any>) {
+  return {
+    tcgplayerSkus: [
+      ...new Set(
+        items
+          .map((item) =>
+            typeof item.tcgplayerSku === 'number' ? item.tcgplayerSku : undefined,
+          )
+          .filter((value): value is number => typeof value === 'number'),
+      ),
+    ],
+    tcgplayerProductIds: [
+      ...new Set(
+        items
+          .map((item) => normalizeProductId(item.productId))
+          .filter((value): value is number => typeof value === 'number'),
+      ),
+    ],
+  }
+}
+
+async function loadCatalogLookupMaps(
   ctx: { db: any },
-  items: Array<any>,
+  params: {
+    tcgplayerSkus: Array<number>
+    tcgplayerProductIds: Array<number>
+  },
 ) {
   const skuMap = new Map<number, any>()
   const productMap = new Map<number, any>()
 
-  const distinctSkus = [...new Set(
-    items
-      .map((item) =>
-        typeof item.tcgplayerSku === 'number' ? item.tcgplayerSku : undefined,
-      )
-      .filter((value): value is number => typeof value === 'number'),
-  )]
-  const distinctProductIds = [...new Set(
-    items
-      .map((item) => normalizeProductId(item.productId))
-      .filter((value): value is number => typeof value === 'number'),
-  )]
-
-  for (const tcgplayerSku of distinctSkus) {
+  for (const tcgplayerSku of params.tcgplayerSkus) {
     const catalogSku = await ctx.db
       .query('catalogSkus')
       .withIndex('by_tcgplayerSku', (q: any) => q.eq('tcgplayerSku', tcgplayerSku))
@@ -62,7 +73,7 @@ async function enrichOrderItemsWithCatalogLinks(
     }
   }
 
-  for (const tcgplayerProductId of distinctProductIds) {
+  for (const tcgplayerProductId of params.tcgplayerProductIds) {
     const catalogProduct = await ctx.db
       .query('catalogProducts')
       .withIndex('by_tcgplayerProductId', (q: any) =>
@@ -74,6 +85,21 @@ async function enrichOrderItemsWithCatalogLinks(
       productMap.set(tcgplayerProductId, catalogProduct)
     }
   }
+
+  return {
+    skuMap,
+    productMap,
+  }
+}
+
+function enrichOrderItemsWithCatalogLinks(
+  items: Array<any>,
+  lookupMaps: {
+    skuMap: Map<number, any>
+    productMap: Map<number, any>
+  },
+) {
+  const { skuMap, productMap } = lookupMaps
 
   return items.map((item) => {
     const productId = normalizeProductId(item.productId)
@@ -96,6 +122,29 @@ async function enrichOrderItemsWithCatalogLinks(
   })
 }
 
+function collectBatchCatalogLookupKeys(orders: Array<any>) {
+  const tcgplayerSkus = new Set<number>()
+  const tcgplayerProductIds = new Set<number>()
+
+  for (const order of orders) {
+    for (const item of order.items ?? []) {
+      if (typeof item.tcgplayerSku === 'number') {
+        tcgplayerSkus.add(item.tcgplayerSku)
+      }
+
+      const productId = normalizeProductId(item.productId)
+      if (typeof productId === 'number') {
+        tcgplayerProductIds.add(productId)
+      }
+    }
+  }
+
+  return {
+    tcgplayerSkus: [...tcgplayerSkus],
+    tcgplayerProductIds: [...tcgplayerProductIds],
+  }
+}
+
 function orderItemsNeedCatalogUpdate(currentItems: Array<any>, nextItems: Array<any>) {
   if (currentItems.length !== nextItems.length) {
     return true
@@ -111,8 +160,23 @@ function orderItemsNeedCatalogUpdate(currentItems: Array<any>, nextItems: Array<
 }
 
 async function upsertSingleOrder(ctx: { db: any }, order: any) {
+  const lookupMaps = await loadCatalogLookupMaps(
+    ctx,
+    distinctCatalogLookupKeys(order.items),
+  )
+  await upsertSingleOrderWithCatalogLinks(ctx, order, lookupMaps)
+}
+
+async function upsertSingleOrderWithCatalogLinks(
+  ctx: { db: any },
+  order: any,
+  lookupMaps: {
+    skuMap: Map<number, any>
+    productMap: Map<number, any>
+  },
+) {
   const { status: _ignoredStatus, ...orderRecord } = order
-  const enrichedItems = await enrichOrderItemsWithCatalogLinks(ctx, orderRecord.items)
+  const enrichedItems = enrichOrderItemsWithCatalogLinks(orderRecord.items, lookupMaps)
 
   const existing = await ctx.db
     .query('orders')
@@ -231,10 +295,14 @@ export const backfillCatalogLinks = internalMutation({
       cursor,
       numItems: Math.max(1, Math.min(limit, 100)),
     })
+    const lookupMaps = await loadCatalogLookupMaps(
+      ctx,
+      collectBatchCatalogLookupKeys(page.page),
+    )
     let updated = 0
 
     for (const order of page.page) {
-      const nextItems = await enrichOrderItemsWithCatalogLinks(ctx, order.items)
+      const nextItems = enrichOrderItemsWithCatalogLinks(order.items, lookupMaps)
       if (!orderItemsNeedCatalogUpdate(order.items, nextItems)) {
         continue
       }
@@ -258,8 +326,13 @@ export const backfillCatalogLinks = internalMutation({
 export const upsertOrdersBatch = internalMutation({
   args: { orders: v.array(v.any()) },
   handler: async (ctx, { orders }) => {
+    const lookupMaps = await loadCatalogLookupMaps(
+      ctx,
+      collectBatchCatalogLookupKeys(orders),
+    )
+
     for (const order of orders) {
-      await upsertSingleOrder(ctx, order)
+      await upsertSingleOrderWithCatalogLinks(ctx, order, lookupMaps)
     }
   },
 })

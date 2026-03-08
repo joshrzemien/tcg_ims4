@@ -127,7 +127,12 @@ export default defineSchema({
     productCount: v.number(),
     setCount: v.number(),
     updatedAt: v.number(),
-  }).index('by_key', ['key']),
+  })
+    .index('by_key', ['key'])
+    .index('by_displayName', ['displayName'])
+    .searchIndex('search_displayName', {
+      searchField: 'displayName',
+    }),
   catalogSets: defineTable({
     key: v.string(),
     categoryKey: v.string(),
@@ -155,10 +160,41 @@ export default defineSchema({
     currentPricingSyncStartedAt: v.optional(v.number()),
     lastPricingSyncError: v.optional(v.string()),
     pendingSyncMode: v.optional(setSyncModeValidator),
+    inRuleScope: v.boolean(),
+    hasCompletedSync: v.boolean(),
+    latestSourceUpdatedAt: v.optional(v.number()),
+    hasSourceChanges: v.boolean(),
+    activeTrackedSeriesCount: v.number(),
+    hasActiveTrackedSeries: v.boolean(),
     updatedAt: v.number(),
   })
     .index('by_key', ['key'])
-    .index('by_categoryKey', ['categoryKey']),
+    .index('by_categoryKey', ['categoryKey'])
+    .index('by_name', ['name'])
+    .index('by_categoryKey_name', ['categoryKey', 'name'])
+    .index('by_inRuleScope_isSynced_lastSyncedAt', [
+      'inRuleScope',
+      'hasCompletedSync',
+      'lastSyncedAt',
+    ])
+    .index('by_inRuleScope_hasSourceChanges_latestSourceUpdatedAt', [
+      'inRuleScope',
+      'hasSourceChanges',
+      'latestSourceUpdatedAt',
+    ])
+    .index('by_inRuleScope_syncStatus_nextSyncAttemptAt', [
+      'inRuleScope',
+      'syncStatus',
+      'nextSyncAttemptAt',
+    ])
+    .index('by_hasActiveTrackedSeries_lastSyncedAt', [
+      'hasActiveTrackedSeries',
+      'lastSyncedAt',
+    ])
+    .searchIndex('search_name', {
+      searchField: 'name',
+      filterFields: ['categoryKey'],
+    }),
   catalogProducts: defineTable({
     key: v.string(),
     categoryKey: v.string(),
@@ -237,6 +273,7 @@ export default defineSchema({
     catalogProductKey: v.string(),
     categoryKey: v.string(),
     setKey: v.string(),
+    searchText: v.string(),
     name: v.string(),
     number: v.optional(v.string()),
     rarity: v.optional(v.string()),
@@ -259,10 +296,32 @@ export default defineSchema({
     active: v.boolean(),
     updatedAt: v.number(),
   })
+    .index('by_updatedAt', ['updatedAt'])
     .index('by_active', ['active'])
+    .index('by_active_updatedAt', ['active', 'updatedAt'])
+    .index('by_pricingSource_updatedAt', ['pricingSource', 'updatedAt'])
+    .index('by_active_pricingSource_updatedAt', [
+      'active',
+      'pricingSource',
+      'updatedAt',
+    ])
+    .index('by_printingKey_updatedAt', ['printingKey', 'updatedAt'])
+    .index('by_active_printingKey_updatedAt', [
+      'active',
+      'printingKey',
+      'updatedAt',
+    ])
     .index('by_setKey', ['setKey'])
+    .index('by_setKey_updatedAt', ['setKey', 'updatedAt'])
     .index('by_categoryKey', ['categoryKey'])
-    .index('by_active_setKey', ['active', 'setKey']),
+    .index('by_categoryKey_updatedAt', ['categoryKey', 'updatedAt'])
+    .index('by_active_setKey', ['active', 'setKey'])
+    .index('by_active_setKey_updatedAt', ['active', 'setKey', 'updatedAt'])
+    .index('by_active_categoryKey_updatedAt', ['active', 'categoryKey', 'updatedAt'])
+    .searchIndex('search_searchText', {
+      searchField: 'searchText',
+      filterFields: ['active', 'categoryKey', 'setKey', 'pricingSource', 'printingKey'],
+    }),
   pricingTrackedSeriesRules: defineTable({
     key: v.string(),
     ruleId: v.id('pricingTrackingRules'),
@@ -300,12 +359,34 @@ export default defineSchema({
     lastSeenAt: v.number(),
     occurrenceCount: v.number(),
     active: v.boolean(),
+    isIgnored: v.boolean(),
     ignoredAt: v.optional(v.number()),
   })
     .index('by_key', ['key'])
+    .index('by_lastSeenAt', ['lastSeenAt'])
+    .index('by_issueType_lastSeenAt', ['issueType', 'lastSeenAt'])
+    .index('by_isIgnored_lastSeenAt', ['isIgnored', 'lastSeenAt'])
+    .index('by_isIgnored_issueType_lastSeenAt', [
+      'isIgnored',
+      'issueType',
+      'lastSeenAt',
+    ])
     .index('by_active', ['active'])
+    .index('by_active_lastSeenAt', ['active', 'lastSeenAt'])
+    .index('by_active_issueType_lastSeenAt', ['active', 'issueType', 'lastSeenAt'])
+    .index('by_active_isIgnored_lastSeenAt', ['active', 'isIgnored', 'lastSeenAt'])
+    .index('by_active_isIgnored_issueType_lastSeenAt', [
+      'active',
+      'isIgnored',
+      'issueType',
+      'lastSeenAt',
+    ])
     .index('by_active_setKey', ['active', 'setKey'])
-    .index('by_setKey', ['setKey']),
+    .index('by_active_setKey_lastSeenAt', ['active', 'setKey', 'lastSeenAt'])
+    .index('by_setKey', ['setKey'])
+    .index('by_setKey_lastSeenAt', ['setKey', 'lastSeenAt'])
+    .index('by_categoryKey_lastSeenAt', ['categoryKey', 'lastSeenAt'])
+    .index('by_active_categoryKey_lastSeenAt', ['active', 'categoryKey', 'lastSeenAt']),
   pricingDashboardStats: defineTable({
     key: v.string(),
     totalTrackedSeries: v.number(),
@@ -360,7 +441,8 @@ export default defineSchema({
   })
     .index('by_orderId', ['orderId'])
     .index('by_easypostShipmentId', ['easypostShipmentId'])
-    .index('by_status_createdAt', ['status', 'createdAt']),
+    .index('by_status_createdAt', ['status', 'createdAt'])
+    .index('by_orderId_status_createdAt', ['orderId', 'status', 'createdAt']),
   orders: defineTable({
     externalId: v.string(), // Manapool UUID
     orderNumber: v.string(), // Manapool UUID (same for now, label is for shipping)

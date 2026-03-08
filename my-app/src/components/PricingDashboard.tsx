@@ -692,8 +692,10 @@ function SeriesTab(_props: {
   const seriesPage = useQuery(api.pricing.queries.listTrackedSeries, {
     activeOnly,
     search: searchText || undefined,
-    cursor,
-    limit: 50,
+    paginationOpts: {
+      cursor,
+      numItems: 50,
+    },
   })
 
   const series = seriesPage?.page ?? []
@@ -1059,8 +1061,10 @@ function IssuesTab({ onFlash }: { onFlash: (msg: FlashMessage) => void }) {
     activeOnly,
     issueType: issueTypeFilter as any,
     includeIgnored,
-    cursor,
-    limit: 50,
+    paginationOpts: {
+      cursor,
+      numItems: 50,
+    },
   })
 
   const issues = issuesPage?.page ?? []
@@ -1319,36 +1323,26 @@ function CreateRuleModal({
 
   const categories = useQuery(
     api.catalog.queries.listCategories,
-    ruleType === 'category' ? {} : 'skip',
+    ruleType === 'category'
+      ? {
+          search: searchText.trim() || undefined,
+          limit: 25,
+        }
+      : 'skip',
   )
   const sets = useQuery(
     api.catalog.queries.listSets,
-    ruleType === 'set' ? {} : 'skip',
+    ruleType === 'set'
+      ? {
+          search: searchText.trim() || undefined,
+          limit: 25,
+        }
+      : 'skip',
   )
-
-  const filteredCategories =
-    categories?.filter((cat) => {
-      const q = searchText.trim().toLowerCase()
-      if (!q) return true
-      return (
-        cat.displayName.toLowerCase().includes(q) ||
-        cat.name.toLowerCase().includes(q) ||
-        cat.key.toLowerCase().includes(q)
-      )
-    }) ?? []
-
-  const filteredSets =
-    sets?.filter((set) => {
-      const q = searchText.trim().toLowerCase()
-      if (!q) return true
-      return (
-        set.name.toLowerCase().includes(q) ||
-        set.categoryDisplayName.toLowerCase().includes(q) ||
-        set.label.toLowerCase().includes(q) ||
-        set.key.toLowerCase().includes(q) ||
-        (set.abbreviation?.toLowerCase().includes(q) ?? false)
-      )
-    }) ?? []
+  const selectedSet = useQuery(
+    api.catalog.queries.getSetByKey,
+    ruleType === 'set' && keyValue ? { setKey: keyValue } : 'skip',
+  )
 
   const searchResults = useQuery(
     api.pricing.queries.searchCatalogProducts,
@@ -1501,12 +1495,14 @@ function CreateRuleModal({
                   />
                 </div>
                 <div className="max-h-40 overflow-y-auto rounded border bg-background">
-                  {filteredCategories.length === 0 ? (
+                  {(categories?.length ?? 0) === 0 ? (
                     <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-                      No categories match
+                      {searchText.trim()
+                        ? 'No categories match the current search.'
+                        : 'No categories available.'}
                     </p>
                   ) : (
-                    filteredCategories.map((cat) => (
+                    categories!.map((cat) => (
                       <button
                         key={cat.key}
                         type="button"
@@ -1561,12 +1557,14 @@ function CreateRuleModal({
                   />
                 </div>
                 <div className="max-h-48 overflow-y-auto rounded border bg-background">
-                  {filteredSets.length === 0 ? (
+                  {(sets?.length ?? 0) === 0 ? (
                     <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-                      No sets match
+                      {searchText.trim()
+                        ? 'No sets match the current search.'
+                        : 'No sets available.'}
                     </p>
                   ) : (
-                    filteredSets.map((set) => (
+                    sets!.map((set) => (
                       <button
                         key={set.key}
                         type="button"
@@ -1591,7 +1589,8 @@ function CreateRuleModal({
                 </div>
                 {/* Sync status detail for selected set */}
                 {keyValue && (() => {
-                  const selected = sets.find((s) => s.key === keyValue)
+                  const selected =
+                    selectedSet ?? sets?.find((s) => s.key === keyValue)
                   if (!selected) return null
                   return (
                     <div className="flex items-center gap-2 rounded border border-border/50 bg-muted/5 px-2 py-1.5">

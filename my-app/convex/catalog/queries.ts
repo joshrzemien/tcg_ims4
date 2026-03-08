@@ -1,13 +1,8 @@
 import { v } from 'convex/values'
 import { query } from '../_generated/server'
-import { listRuleScopedSetKeys } from '../pricing/ruleScope'
+import { loadSyncCandidates } from './syncCandidates'
 import { getAllowedCatalogCategoryIds } from './config'
-import {
-  compareSyncCandidates,
-  getSyncPriority,
-  isSyncCandidateEligible,
-  needsRuleScopeCleanup,
-} from './syncState'
+import { getSyncPriority } from './syncState'
 
 async function countDocuments(
   queryHandle: AsyncIterable<unknown>,
@@ -50,66 +45,87 @@ export const getSetByKey = query({
 })
 
 export const listCategories = query({
-  args: {},
-  handler: async (ctx) => {
-    const categories = await ctx.db.query('catalogCategories').collect()
+  args: {
+    search: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { search, limit }) => {
+    const normalizedSearch = search?.trim()
+    const maxResults = Math.max(1, Math.min(limit ?? 25, 100))
+    const categories =
+      normalizedSearch && normalizedSearch.length >= 2
+        ? await ctx.db
+            .query('catalogCategories')
+            .withSearchIndex('search_displayName', (q) =>
+              q.search('displayName', normalizedSearch),
+            )
+            .take(maxResults)
+        : await ctx.db
+            .query('catalogCategories')
+            .withIndex('by_displayName')
+            .take(maxResults)
 
-    return categories
-      .sort((left, right) => left.displayName.localeCompare(right.displayName))
-      .map((category) => ({
-        key: category.key,
-        label: category.displayName,
-        name: category.name,
-        displayName: category.displayName,
-        tcgtrackingCategoryId: category.tcgtrackingCategoryId,
-        productCount: category.productCount,
-        setCount: category.setCount,
-        updatedAt: category.updatedAt,
-      }))
+    return categories.map((category) => ({
+      key: category.key,
+      label: category.displayName,
+      name: category.name,
+      displayName: category.displayName,
+      tcgtrackingCategoryId: category.tcgtrackingCategoryId,
+      productCount: category.productCount,
+      setCount: category.setCount,
+      updatedAt: category.updatedAt,
+    }))
   },
 })
 
 export const listSets = query({
   args: {
     categoryKey: v.optional(v.string()),
+    search: v.optional(v.string()),
+    limit: v.optional(v.number()),
   },
-  handler: async (ctx, { categoryKey }) => {
-    const sets = categoryKey
-      ? await ctx.db
-          .query('catalogSets')
-          .withIndex('by_categoryKey', (q) => q.eq('categoryKey', categoryKey))
-          .collect()
-      : await ctx.db.query('catalogSets').collect()
+  handler: async (ctx, { categoryKey, search, limit }) => {
+    const normalizedSearch = search?.trim()
+    const maxResults = Math.max(1, Math.min(limit ?? 25, 100))
+    const sets =
+      normalizedSearch && normalizedSearch.length >= 2
+        ? await ctx.db
+            .query('catalogSets')
+            .withSearchIndex('search_name', (q) => {
+              let searchQuery = q.search('name', normalizedSearch)
+              if (categoryKey) {
+                searchQuery = searchQuery.eq('categoryKey', categoryKey)
+              }
+              return searchQuery
+            })
+            .take(maxResults)
+        : categoryKey
+          ? await ctx.db
+              .query('catalogSets')
+              .withIndex('by_categoryKey_name', (q) =>
+                q.eq('categoryKey', categoryKey),
+              )
+              .take(maxResults)
+          : await ctx.db.query('catalogSets').withIndex('by_name').take(maxResults)
 
-    return sets
-      .sort((left, right) => {
-        const categoryComparison = left.categoryDisplayName.localeCompare(
-          right.categoryDisplayName,
-        )
-        if (categoryComparison !== 0) {
-          return categoryComparison
-        }
-
-        return left.name.localeCompare(right.name)
-      })
-      .map((set) => ({
-        key: set.key,
-        label: `${set.categoryDisplayName} / ${set.name}`,
-        name: set.name,
-        abbreviation: set.abbreviation,
-        categoryKey: set.categoryKey,
-        categoryDisplayName: set.categoryDisplayName,
-        tcgtrackingSetId: set.tcgtrackingSetId,
-        productCount: set.productCount,
-        skuCount: set.skuCount,
-        publishedOn: set.publishedOn,
-        syncStatus: set.syncStatus,
-        pricingSyncStatus: set.pricingSyncStatus,
-        pendingSyncMode: set.pendingSyncMode,
-        syncedProductCount: set.syncedProductCount,
-        syncedSkuCount: set.syncedSkuCount,
-        updatedAt: set.updatedAt,
-      }))
+    return sets.map((set) => ({
+      key: set.key,
+      label: `${set.categoryDisplayName} / ${set.name}`,
+      name: set.name,
+      abbreviation: set.abbreviation,
+      categoryKey: set.categoryKey,
+      categoryDisplayName: set.categoryDisplayName,
+      tcgtrackingSetId: set.tcgtrackingSetId,
+      productCount: set.productCount,
+      skuCount: set.skuCount,
+      publishedOn: set.publishedOn,
+      syncStatus: set.syncStatus,
+      pricingSyncStatus: set.pricingSyncStatus,
+      pendingSyncMode: set.pendingSyncMode,
+      syncedProductCount: set.syncedProductCount,
+      syncedSkuCount: set.syncedSkuCount,
+      updatedAt: set.updatedAt,
+    }))
   },
 })
 
@@ -118,42 +134,16 @@ export const listSyncCandidates = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, { limit }) => {
-    const sets = await ctx.db.query('catalogSets').collect()
     const maxResults = Math.max(1, Math.min(limit ?? 25, 100))
     const allowedCategoryIds = getAllowedCatalogCategoryIds()
     const now = Date.now()
-    const ruleScopedSetKeys = await listRuleScopedSetKeys(ctx, { sets })
-
-    const cleanupCandidates = sets
-      .filter(
-        (set) =>
-          !ruleScopedSetKeys.has(set.key) &&
-          set.syncStatus !== 'syncing' &&
-          set.pricingSyncStatus !== 'syncing' &&
-          needsRuleScopeCleanup(set),
-      )
-      .sort(
-        (left, right) => (right.lastSyncedAt ?? 0) - (left.lastSyncedAt ?? 0),
-      )
-
-    const inScopeCandidates = sets
-      .filter((set) => ruleScopedSetKeys.has(set.key))
-      .filter((set) => isSyncCandidateEligible(set, now, allowedCategoryIds))
-      .sort(compareSyncCandidates)
-
-    const orderedCandidates = [...cleanupCandidates, ...inScopeCandidates]
-    const seenSetKeys = new Set<string>()
+    const orderedCandidates = await loadSyncCandidates(ctx, {
+      limit: maxResults,
+      allowedCategoryIds,
+      now,
+    })
 
     return orderedCandidates
-      .filter((set) => {
-        if (seenSetKeys.has(set.key)) {
-          return false
-        }
-
-        seenSetKeys.add(set.key)
-        return true
-      })
-      .slice(0, maxResults)
       .map((set) => ({
         ...set,
         syncPriority: getSyncPriority(set),

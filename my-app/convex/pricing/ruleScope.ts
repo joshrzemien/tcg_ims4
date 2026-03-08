@@ -7,9 +7,12 @@ type RuleScopeCtx = {
 type TrackingRuleDoc = Doc<'pricingTrackingRules'>
 type CatalogSetDoc = Doc<'catalogSets'>
 
-export function categoryRuleAppliesToSet(
+export function categoryRuleAppliesToSetAtTime(
   rule: TrackingRuleDoc,
-  set: CatalogSetDoc,
+  set: {
+    categoryKey: string
+    _creationTime: number
+  },
 ) {
   if (rule.ruleType !== 'category' || rule.categoryKey !== set.categoryKey) {
     return false
@@ -21,6 +24,13 @@ export function categoryRuleAppliesToSet(
   }
 
   return rule.autoTrackFutureSets !== false
+}
+
+export function categoryRuleAppliesToSet(
+  rule: TrackingRuleDoc,
+  set: CatalogSetDoc,
+) {
+  return categoryRuleAppliesToSetAtTime(rule, set)
 }
 
 export async function listRuleScopedSetKeys(
@@ -42,7 +52,7 @@ export async function listRuleScopedSetKeys(
   const eligibleSetKeys = new Set<string>()
   const directSetKeys = new Set<string>()
   const categoryRulesByCategoryKey = new Map<string, Array<TrackingRuleDoc>>()
-  const manualProductKeys: Array<string> = []
+  const manualProductKeysNeedingLookup: Array<string> = []
 
   for (const rule of activeRules) {
     if (rule.ruleType === 'set' && rule.setKey) {
@@ -58,8 +68,13 @@ export async function listRuleScopedSetKeys(
       continue
     }
 
+    if (rule.ruleType === 'manual_product' && rule.setKey) {
+      directSetKeys.add(rule.setKey)
+      continue
+    }
+
     if (rule.ruleType === 'manual_product' && rule.catalogProductKey) {
-      manualProductKeys.push(rule.catalogProductKey)
+      manualProductKeysNeedingLookup.push(rule.catalogProductKey)
     }
   }
 
@@ -75,7 +90,7 @@ export async function listRuleScopedSetKeys(
     }
   }
 
-  for (const catalogProductKey of manualProductKeys) {
+  for (const catalogProductKey of manualProductKeysNeedingLookup) {
     const product = await ctx.db
       .query('catalogProducts')
       .withIndex('by_key', (q: any) => q.eq('key', catalogProductKey))

@@ -87,6 +87,41 @@ async function upsertOrdersInBatches(
   }
 }
 
+async function loadOrdersInCreatedAtWindow(
+  ctx: ActionCtx,
+  params: {
+    fromCreatedAt: number
+    toCreatedAt: number
+    pageSize?: number
+  },
+) {
+  const orders: Array<HistoricalOrder> = []
+  let cursor: string | null = null
+  let isDone = false
+  const pageSize = Math.max(1, Math.min(params.pageSize ?? 250, 500))
+
+  while (!isDone) {
+    const page: {
+      page: Array<HistoricalOrder>
+      continueCursor: string | null
+      isDone: boolean
+    } = await ctx.runQuery(internal.orders.queries.listWindowPage, {
+      fromCreatedAt: params.fromCreatedAt,
+      toCreatedAt: params.toCreatedAt,
+      paginationOpts: {
+        cursor,
+        numItems: pageSize,
+      },
+    })
+
+    orders.push(...page.page)
+    cursor = page.continueCursor
+    isDone = page.isDone
+  }
+
+  return orders
+}
+
 function parseDateArg(value: string | undefined, fallbackIso?: string): Date {
   const source = value ?? fallbackIso
   if (!source) {
@@ -504,20 +539,16 @@ export const syncHistorical = internalAction({
       await upsertOrdersInBatches(ctx, backfilledOrders, orderBatchSize)
     }
 
-    const orders = (await ctx.runQuery(
-      api.orders.queries.list,
-    )) as Array<HistoricalOrder>
     const earliestOrderTime =
       startDate.getTime() - orderLookbackDays * MS_PER_DAY
     const latestOrderTime =
       syncEndDate.getTime() + orderLookaheadDays * MS_PER_DAY
+    const orders = await loadOrdersInCreatedAtWindow(ctx, {
+      fromCreatedAt: earliestOrderTime,
+      toCreatedAt: latestOrderTime,
+    })
 
-    const normalizedOrders = orders
-      .filter((order) => {
-        const createdAt = createdAtMs(order.createdAt)
-        return createdAt >= earliestOrderTime && createdAt <= latestOrderTime
-      })
-      .map((order) => {
+    const normalizedOrders = orders.map((order) => {
         const recipient = normalizeRecipient(
           order.shippingAddress.name || order.customerName,
         )

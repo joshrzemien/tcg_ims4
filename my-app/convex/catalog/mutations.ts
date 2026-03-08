@@ -5,15 +5,11 @@ import {
   refreshRuleDashboardFieldsForProductKeys,
   refreshRuleDashboardFieldsForSet,
 } from '../pricing/dashboardReadModel'
-import { listRuleScopedSetKeys } from '../pricing/ruleScope'
+import { categoryRuleAppliesToSetAtTime } from '../pricing/ruleScope'
+import { loadSyncCandidates } from './syncCandidates'
 import { getAllowedCatalogCategoryIds } from './config'
 import { pickHigherPrioritySyncMode } from './syncModes'
-import {
-  compareSyncCandidates,
-  getSyncPriority,
-  isSyncCandidateEligible,
-  needsRuleScopeCleanup,
-} from './syncState'
+import { getSyncPriority } from './syncState'
 
 const SYNC_RETRY_BACKOFF_MS = [
   60 * 60 * 1000,
@@ -98,6 +94,75 @@ function hasSetSourceChanged(
   )
 }
 
+function buildRuleScopeState(activeRules: Array<any>) {
+  const directSetKeys = new Set<string>()
+  const categoryRulesByCategoryKey = new Map<string, Array<any>>()
+
+  for (const rule of activeRules) {
+    if (!rule.active) {
+      continue
+    }
+
+    if ((rule.ruleType === 'set' || rule.ruleType === 'manual_product') && rule.setKey) {
+      directSetKeys.add(rule.setKey)
+      continue
+    }
+
+    if (rule.ruleType === 'category' && rule.categoryKey) {
+      const categoryRules = categoryRulesByCategoryKey.get(rule.categoryKey) ?? []
+      categoryRules.push(rule)
+      categoryRulesByCategoryKey.set(rule.categoryKey, categoryRules)
+    }
+  }
+
+  return {
+    directSetKeys,
+    categoryRulesByCategoryKey,
+  }
+}
+
+function isSetInDerivedRuleScope(
+  set: {
+    key: string
+    categoryKey: string
+  },
+  ruleScopeState: ReturnType<typeof buildRuleScopeState>,
+  creationTime: number,
+) {
+  if (ruleScopeState.directSetKeys.has(set.key)) {
+    return true
+  }
+
+  const categoryRules =
+    ruleScopeState.categoryRulesByCategoryKey.get(set.categoryKey) ?? []
+
+  return categoryRules.some((rule) =>
+    categoryRuleAppliesToSetAtTime(rule, {
+      categoryKey: set.categoryKey,
+      _creationTime: creationTime,
+    }),
+  )
+}
+
+function computeHasSourceChanges(params: {
+  inRuleScope: boolean
+  latestSourceUpdatedAt?: number
+  lastSyncedAt?: number
+}) {
+  if (!params.inRuleScope) {
+    return false
+  }
+
+  if (
+    typeof params.latestSourceUpdatedAt !== 'number' ||
+    typeof params.lastSyncedAt !== 'number'
+  ) {
+    return false
+  }
+
+  return params.latestSourceUpdatedAt > params.lastSyncedAt
+}
+
 function isSetProcessing(existing: {
   syncStatus: 'pending' | 'syncing' | 'ready' | 'error'
   pricingSyncStatus: 'idle' | 'syncing' | 'error'
@@ -161,6 +226,11 @@ export const upsertSetsBatch = internalMutation({
     const touchedSetKeys = new Set<string>()
     const touchedCategoryKeys = new Set<string>()
     const touchedProductKeys = new Set<string>()
+    const activeRules = await ctx.db
+      .query('pricingTrackingRules')
+      .withIndex('by_active', (q: any) => q.eq('active', true))
+      .collect()
+    const ruleScopeState = buildRuleScopeState(activeRules)
 
     for (const incoming of sets) {
       touchedSetKeys.add(incoming.key)
@@ -172,6 +242,11 @@ export const upsertSetsBatch = internalMutation({
 
       const nextUpdatedAt = incoming.updatedAt
       const sourceTimestamp = latestSourceTimestamp(incoming)
+      const inRuleScope = isSetInDerivedRuleScope(
+        incoming,
+        ruleScopeState,
+        existing?._creationTime ?? Date.now(),
+      )
       const isStale =
         typeof sourceTimestamp === 'number' &&
         typeof existing?.lastSyncedAt === 'number' &&
@@ -223,6 +298,16 @@ export const upsertSetsBatch = internalMutation({
             existing.lastPricingSyncError,
           ),
           pendingSyncMode: existing.pendingSyncMode,
+          inRuleScope,
+          hasCompletedSync: typeof existing.lastSyncedAt === 'number',
+          latestSourceUpdatedAt: sourceTimestamp,
+          hasSourceChanges: computeHasSourceChanges({
+            inRuleScope,
+            latestSourceUpdatedAt: sourceTimestamp,
+            lastSyncedAt: existing.lastSyncedAt,
+          }),
+          activeTrackedSeriesCount: existing.activeTrackedSeriesCount,
+          hasActiveTrackedSeries: existing.hasActiveTrackedSeries,
           syncedProductCount: existing.syncedProductCount,
           syncedSkuCount: existing.syncedSkuCount,
           updatedAt: nextUpdatedAt,
@@ -233,6 +318,12 @@ export const upsertSetsBatch = internalMutation({
           ...incoming,
           syncStatus: 'pending',
           pricingSyncStatus: 'idle',
+          inRuleScope,
+          hasCompletedSync: false,
+          latestSourceUpdatedAt: sourceTimestamp,
+          hasSourceChanges: false,
+          activeTrackedSeriesCount: 0,
+          hasActiveTrackedSeries: false,
           syncedProductCount: 0,
           syncedSkuCount: 0,
         })
@@ -317,6 +408,12 @@ export const markSetSyncCompleted = internalMutation({
       lastSyncError: undefined,
       nextSyncAttemptAt: undefined,
       consecutiveSyncFailures: undefined,
+      hasCompletedSync: true,
+      hasSourceChanges: computeHasSourceChanges({
+        inRuleScope: existing.inRuleScope,
+        latestSourceUpdatedAt: existing.latestSourceUpdatedAt,
+        lastSyncedAt: completedAt,
+      }),
       syncedProductCount,
       syncedSkuCount,
       updatedAt: completedAt,
@@ -716,9 +813,48 @@ export const recordSetScopeCleanup = internalMutation({
       lastSyncError: undefined,
       nextSyncAttemptAt: undefined,
       consecutiveSyncFailures: undefined,
+      inRuleScope: false,
+      hasCompletedSync: false,
+      hasSourceChanges: false,
+      activeTrackedSeriesCount: 0,
+      hasActiveTrackedSeries: false,
       syncedProductCount: 0,
       syncedSkuCount: 0,
       updatedAt: cleanedAt,
+    })
+  },
+})
+
+export const recordSetPricingScopeState = internalMutation({
+  args: {
+    setKey: v.string(),
+    inRuleScope: v.boolean(),
+    activeTrackedSeriesCount: v.number(),
+    updatedAt: v.number(),
+  },
+  handler: async (
+    ctx,
+    { setKey, inRuleScope, activeTrackedSeriesCount, updatedAt },
+  ) => {
+    const existing = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!existing) {
+      throw new Error(`Catalog set not found: ${setKey}`)
+    }
+
+    await ctx.db.patch('catalogSets', existing._id, {
+      inRuleScope,
+      activeTrackedSeriesCount,
+      hasActiveTrackedSeries: activeTrackedSeriesCount > 0,
+      hasSourceChanges: computeHasSourceChanges({
+        inRuleScope,
+        latestSourceUpdatedAt: existing.latestSourceUpdatedAt,
+        lastSyncedAt: existing.lastSyncedAt,
+      }),
+      updatedAt,
     })
   },
 })
@@ -769,29 +905,11 @@ export const claimSyncCandidates = internalMutation({
     const maxResults = Math.max(1, Math.min(limit, 100))
     const allowedCategoryIds = getAllowedCatalogCategoryIds()
     const now = Date.now()
-    const sets = await ctx.db.query('catalogSets').collect()
-    const ruleScopedSetKeys = await listRuleScopedSetKeys(ctx, { sets })
-    const cleanupCandidates = sets
-      .filter(
-        (set) =>
-          !ruleScopedSetKeys.has(set.key) &&
-          set.syncStatus !== 'syncing' &&
-          set.pricingSyncStatus !== 'syncing' &&
-          needsRuleScopeCleanup(set),
-      )
-      .sort(
-        (left, right) => (right.lastSyncedAt ?? 0) - (left.lastSyncedAt ?? 0),
-      )
-    const inScopeCandidates = sets
-      .filter((set) => ruleScopedSetKeys.has(set.key))
-      .filter((set) => isSyncCandidateEligible(set, now, allowedCategoryIds))
-      .sort(compareSyncCandidates)
-    const candidates = [...cleanupCandidates, ...inScopeCandidates]
-      .filter(
-        (set, index, all) =>
-          all.findIndex((entry) => entry.key === set.key) === index,
-      )
-      .slice(0, maxResults)
+    const candidates = await loadSyncCandidates(ctx, {
+      limit: maxResults,
+      allowedCategoryIds,
+      now,
+    })
 
     for (const candidate of candidates) {
       await ctx.db.patch('catalogSets', candidate._id, {

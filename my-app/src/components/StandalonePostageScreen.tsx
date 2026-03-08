@@ -190,7 +190,9 @@ function formatAddress(shipment: StandaloneShipment) {
 }
 
 export function StandalonePostageScreen() {
-  const shipments = useQuery(api.shipments.queries.listStandalone)
+  const shipments = useQuery(api.shipments.queries.listStandalone, {
+    limit: 100,
+  })
   const previewStandalonePurchase = useAction(
     api.shipments.actions.previewStandalonePurchase,
   )

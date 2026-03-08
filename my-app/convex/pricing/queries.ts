@@ -1,3 +1,4 @@
+import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { internalQuery, query } from '../_generated/server'
 import { getZeroDashboardStats } from './dashboardReadModel'
@@ -21,33 +22,119 @@ function clampLimit(limit: number | undefined, fallback = 50, max = 200) {
   return Math.max(1, Math.min(limit ?? fallback, max))
 }
 
-function decodeCursor(cursor: string | null | undefined): number {
-  if (!cursor) {
-    return 0
+async function paginateFilteredQuery<T>({
+  paginationOpts,
+  fetchPage,
+  predicate,
+}: {
+  paginationOpts: {
+    cursor: string | null
+    numItems: number
   }
+  fetchPage: (paginationOpts: {
+    cursor: string | null
+    numItems: number
+  }) => Promise<{
+    page: Array<T>
+    continueCursor: string | null
+    isDone: boolean
+  }>
+  predicate: (value: T) => boolean
+}) {
+  let cursor = paginationOpts.cursor
+  let continueCursor: string | null = cursor
+  let isDone = false
+  let page: Array<T> = []
+  let attempts = 0
 
-  const offset = Number(cursor)
-  return Number.isFinite(offset) && offset >= 0 ? Math.floor(offset) : 0
-}
-
-function encodeCursor(offset: number) {
-  return String(offset)
-}
-
-function paginateArray<T>(
-  items: Array<T>,
-  cursor: string | null | undefined,
-  limit: number,
-) {
-  const offset = decodeCursor(cursor)
-  const page = items.slice(offset, offset + limit)
-  const nextOffset = offset + page.length
+  do {
+    const next = await fetchPage({
+      cursor,
+      numItems: paginationOpts.numItems,
+    })
+    page = next.page.filter(predicate)
+    continueCursor = next.continueCursor
+    isDone = next.isDone
+    cursor = next.continueCursor
+    attempts += 1
+  } while (page.length === 0 && !isDone && attempts < 5)
 
   return {
     page,
-    continueCursor: nextOffset < items.length ? encodeCursor(nextOffset) : null,
-    isDone: nextOffset >= items.length,
+    continueCursor,
+    isDone,
   }
+}
+
+function matchesTrackedSeriesFilters(
+  series: {
+    active: boolean
+    categoryKey: string
+    setKey: string
+    pricingSource: string
+    printingKey: string
+    name: string
+    printingLabel: string
+    catalogProductKey: string
+  },
+  args: {
+    activeOnly?: boolean
+    categoryKey?: string
+    setKey?: string
+    pricingSource?: string
+    printingKey?: string
+    search?: string
+  },
+) {
+  if (args.activeOnly && !series.active) {
+    return false
+  }
+  if (args.categoryKey && series.categoryKey !== args.categoryKey) {
+    return false
+  }
+  if (args.setKey && series.setKey !== args.setKey) {
+    return false
+  }
+  if (args.pricingSource && series.pricingSource !== args.pricingSource) {
+    return false
+  }
+  if (args.printingKey && series.printingKey !== args.printingKey) {
+    return false
+  }
+
+  return true
+}
+
+function matchesResolutionIssueFilters(
+  issue: {
+    active: boolean
+    setKey: string
+    categoryKey: string
+    issueType: string
+    isIgnored?: boolean
+  },
+  args: {
+    activeOnly?: boolean
+    setKey?: string
+    categoryKey?: string
+    issueType?: string
+    includeIgnored?: boolean
+  },
+) {
+  if (args.activeOnly && !issue.active) {
+    return false
+  }
+  if (args.setKey && issue.setKey !== args.setKey) {
+    return false
+  }
+  if (args.categoryKey && issue.categoryKey !== args.categoryKey) {
+    return false
+  }
+  if (args.issueType && issue.issueType !== args.issueType) {
+    return false
+  }
+
+  return args.includeIgnored ? true : issue.isIgnored !== true
 }
 
 export const listRules = query({
@@ -175,73 +262,135 @@ export const listTrackedSeries = query({
     pricingSource: v.optional(pricingSourceFilterValidator),
     search: v.optional(v.string()),
     printingKey: v.optional(v.string()),
-    cursor: v.union(v.string(), v.null()),
-    limit: v.optional(v.number()),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    const allSeries =
-      args.activeOnly && args.setKey
-        ? await ctx.db
+    const normalizedSearch = args.search?.trim()
+
+    if (normalizedSearch) {
+      return await ctx.db
+        .query('pricingTrackedSeries')
+        .withSearchIndex('search_searchText', (q) => {
+          let searchQuery = q.search('searchText', normalizedSearch)
+          if (args.activeOnly) {
+            searchQuery = searchQuery.eq('active', true)
+          }
+          if (args.categoryKey) {
+            searchQuery = searchQuery.eq('categoryKey', args.categoryKey)
+          }
+          if (args.setKey) {
+            searchQuery = searchQuery.eq('setKey', args.setKey)
+          }
+          if (args.pricingSource) {
+            searchQuery = searchQuery.eq('pricingSource', args.pricingSource)
+          }
+          if (args.printingKey) {
+            searchQuery = searchQuery.eq('printingKey', args.printingKey)
+          }
+          return searchQuery
+        })
+        .paginate(args.paginationOpts)
+    }
+
+    return await paginateFilteredQuery({
+      paginationOpts: args.paginationOpts,
+      fetchPage: async (paginationOpts) => {
+        if (args.activeOnly && args.pricingSource && !args.setKey && !args.categoryKey) {
+          return await ctx.db
             .query('pricingTrackedSeries')
-            .withIndex('by_active_setKey', (q) =>
-              q.eq('active', true).eq('setKey', args.setKey!),
+            .withIndex('by_active_pricingSource_updatedAt', (q) =>
+              q.eq('active', true).eq('pricingSource', args.pricingSource!),
             )
-            .collect()
-        : args.activeOnly
-          ? await ctx.db
-              .query('pricingTrackedSeries')
-              .withIndex('by_active', (q) => q.eq('active', true))
-              .collect()
-          : args.setKey
-            ? await ctx.db
-                .query('pricingTrackedSeries')
-                .withIndex('by_setKey', (q) => q.eq('setKey', args.setKey!))
-                .collect()
-            : args.categoryKey
-              ? await ctx.db
-                  .query('pricingTrackedSeries')
-                  .withIndex('by_categoryKey', (q) =>
-                    q.eq('categoryKey', args.categoryKey!),
-                  )
-                  .collect()
-              : await ctx.db.query('pricingTrackedSeries').collect()
-    const searchValue = args.search?.trim().toLowerCase()
-    const filtered = allSeries
-      .filter((series) =>
-        args.activeOnly && args.setKey
-          ? true
-          : args.activeOnly
-            ? series.active
-            : true,
-      )
-      .filter((series) =>
-        args.categoryKey ? series.categoryKey === args.categoryKey : true,
-      )
-      .filter((series) =>
-        args.setKey && !(args.activeOnly && args.setKey)
-          ? series.setKey === args.setKey
-          : true,
-      )
-      .filter((series) =>
-        args.pricingSource ? series.pricingSource === args.pricingSource : true,
-      )
-      .filter((series) =>
-        args.printingKey ? series.printingKey === args.printingKey : true,
-      )
-      .filter((series) => {
-        if (!searchValue) {
-          return true
+            .order('desc')
+            .paginate(paginationOpts)
         }
 
-        return (
-          series.name.toLowerCase().includes(searchValue) ||
-          series.printingLabel.toLowerCase().includes(searchValue) ||
-          series.catalogProductKey.toLowerCase().includes(searchValue)
-        )
-      })
-      .sort((left, right) => right.updatedAt - left.updatedAt)
+        if (args.pricingSource && !args.setKey && !args.categoryKey) {
+          return await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_pricingSource_updatedAt', (q) =>
+              q.eq('pricingSource', args.pricingSource!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
 
-    return paginateArray(filtered, args.cursor, clampLimit(args.limit))
+        if (args.activeOnly && args.printingKey && !args.setKey && !args.categoryKey) {
+          return await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_active_printingKey_updatedAt', (q) =>
+              q.eq('active', true).eq('printingKey', args.printingKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.printingKey && !args.setKey && !args.categoryKey) {
+          return await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_printingKey_updatedAt', (q) =>
+              q.eq('printingKey', args.printingKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.activeOnly && args.setKey) {
+          return await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_active_setKey_updatedAt', (q) =>
+              q.eq('active', true).eq('setKey', args.setKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.activeOnly && args.categoryKey) {
+          return await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_active_categoryKey_updatedAt', (q) =>
+              q.eq('active', true).eq('categoryKey', args.categoryKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.activeOnly) {
+          return await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_active_updatedAt', (q) => q.eq('active', true))
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.setKey) {
+          return await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_setKey_updatedAt', (q) =>
+              q.eq('setKey', args.setKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.categoryKey) {
+          return await ctx.db
+            .query('pricingTrackedSeries')
+            .withIndex('by_categoryKey_updatedAt', (q) =>
+              q.eq('categoryKey', args.categoryKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        return await ctx.db
+          .query('pricingTrackedSeries')
+          .withIndex('by_updatedAt')
+          .order('desc')
+          .paginate(paginationOpts)
+      },
+      predicate: (series) => matchesTrackedSeriesFilters(series, args),
+    })
   },
 })
 
@@ -305,6 +454,131 @@ export const searchCatalogProducts = query({
   },
 })
 
+export const getRelevantRulesForSet = internalQuery({
+  args: {
+    setKey: v.string(),
+  },
+  handler: async (ctx, { setKey }) => {
+    const set = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+
+    if (!set) {
+      return {
+        set: null,
+        setRules: [],
+        categoryRules: [],
+        manualRules: [],
+      }
+    }
+
+    const [scopedRules, categoryRules] = await Promise.all([
+      ctx.db
+        .query('pricingTrackingRules')
+        .withIndex('by_active_setKey', (q: any) =>
+          q.eq('active', true).eq('setKey', set.key),
+        )
+        .collect(),
+      ctx.db
+        .query('pricingTrackingRules')
+        .withIndex('by_active_categoryKey', (q: any) =>
+          q.eq('active', true).eq('categoryKey', set.categoryKey),
+        )
+        .collect(),
+    ])
+
+    return {
+      set,
+      setRules: scopedRules.filter((rule) => rule.ruleType === 'set'),
+      manualRules: scopedRules.filter((rule) => rule.ruleType === 'manual_product'),
+      categoryRules: categoryRules.filter((rule) =>
+        categoryRuleAppliesToSet(rule, set),
+      ),
+    }
+  },
+})
+
+export const listCatalogProductsForSetPage = internalQuery({
+  args: {
+    setKey: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, { setKey, paginationOpts }) => {
+    return await ctx.db
+      .query('catalogProducts')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .paginate(paginationOpts)
+  },
+})
+
+export const listCatalogSkusForSetPage = internalQuery({
+  args: {
+    setKey: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, { setKey, paginationOpts }) => {
+    return await ctx.db
+      .query('catalogSkus')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .paginate(paginationOpts)
+  },
+})
+
+export const listTrackedSeriesForSetPage = internalQuery({
+  args: {
+    setKey: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, { setKey, paginationOpts }) => {
+    return await ctx.db
+      .query('pricingTrackedSeries')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .paginate(paginationOpts)
+  },
+})
+
+export const listActiveTrackedSeriesForSetPage = internalQuery({
+  args: {
+    setKey: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, { setKey, paginationOpts }) => {
+    return await ctx.db
+      .query('pricingTrackedSeries')
+      .withIndex('by_active_setKey', (q) =>
+        q.eq('active', true).eq('setKey', setKey),
+      )
+      .paginate(paginationOpts)
+  },
+})
+
+export const listTrackedSeriesRulesForSetPage = internalQuery({
+  args: {
+    setKey: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, { setKey, paginationOpts }) => {
+    return await ctx.db
+      .query('pricingTrackedSeriesRules')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .paginate(paginationOpts)
+  },
+})
+
+export const listResolutionIssuesForSetPage = internalQuery({
+  args: {
+    setKey: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, { setKey, paginationOpts }) => {
+    return await ctx.db
+      .query('pricingResolutionIssues')
+      .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
+      .paginate(paginationOpts)
+  },
+})
+
 export const listResolutionIssues = query({
   args: {
     activeOnly: v.optional(v.boolean()),
@@ -312,42 +586,131 @@ export const listResolutionIssues = query({
     categoryKey: v.optional(v.string()),
     issueType: v.optional(pricingResolutionIssueTypeValidator),
     includeIgnored: v.optional(v.boolean()),
-    cursor: v.union(v.string(), v.null()),
-    limit: v.optional(v.number()),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    const issues =
-      args.activeOnly && args.setKey
-        ? await ctx.db
+    if (args.activeOnly && !args.includeIgnored && args.issueType && !args.setKey && !args.categoryKey) {
+      return await ctx.db
+        .query('pricingResolutionIssues')
+        .withIndex('by_active_isIgnored_issueType_lastSeenAt', (q) =>
+          q
+            .eq('active', true)
+            .eq('isIgnored', false)
+            .eq('issueType', args.issueType!),
+        )
+        .order('desc')
+        .paginate(args.paginationOpts)
+    }
+
+    if (args.activeOnly && args.issueType && !args.setKey && !args.categoryKey) {
+      return await ctx.db
+        .query('pricingResolutionIssues')
+        .withIndex('by_active_issueType_lastSeenAt', (q) =>
+          q.eq('active', true).eq('issueType', args.issueType!),
+        )
+        .order('desc')
+        .paginate(args.paginationOpts)
+    }
+
+    if (!args.includeIgnored && args.issueType && !args.setKey && !args.categoryKey) {
+      return await ctx.db
+        .query('pricingResolutionIssues')
+        .withIndex('by_isIgnored_issueType_lastSeenAt', (q) =>
+          q.eq('isIgnored', false).eq('issueType', args.issueType!),
+        )
+        .order('desc')
+        .paginate(args.paginationOpts)
+    }
+
+    if (args.issueType && !args.setKey && !args.categoryKey) {
+      return await ctx.db
+        .query('pricingResolutionIssues')
+        .withIndex('by_issueType_lastSeenAt', (q) =>
+          q.eq('issueType', args.issueType!),
+        )
+        .order('desc')
+        .paginate(args.paginationOpts)
+    }
+
+    if (args.activeOnly && !args.includeIgnored && !args.setKey && !args.categoryKey) {
+      return await ctx.db
+        .query('pricingResolutionIssues')
+        .withIndex('by_active_isIgnored_lastSeenAt', (q) =>
+          q.eq('active', true).eq('isIgnored', false),
+        )
+        .order('desc')
+        .paginate(args.paginationOpts)
+    }
+
+    if (!args.includeIgnored && !args.setKey && !args.categoryKey) {
+      return await ctx.db
+        .query('pricingResolutionIssues')
+        .withIndex('by_isIgnored_lastSeenAt', (q) =>
+          q.eq('isIgnored', false),
+        )
+        .order('desc')
+        .paginate(args.paginationOpts)
+    }
+
+    return await paginateFilteredQuery({
+      paginationOpts: args.paginationOpts,
+      fetchPage: async (paginationOpts) => {
+        if (args.activeOnly && args.setKey) {
+          return await ctx.db
             .query('pricingResolutionIssues')
-            .withIndex('by_active_setKey', (q) =>
+            .withIndex('by_active_setKey_lastSeenAt', (q) =>
               q.eq('active', true).eq('setKey', args.setKey!),
             )
-            .collect()
-        : args.activeOnly
-          ? await ctx.db
-              .query('pricingResolutionIssues')
-              .withIndex('by_active', (q) => q.eq('active', true))
-              .collect()
-          : args.setKey
-            ? await ctx.db
-                .query('pricingResolutionIssues')
-                .withIndex('by_setKey', (q) => q.eq('setKey', args.setKey!))
-                .collect()
-            : await ctx.db.query('pricingResolutionIssues').collect()
-    const filtered = issues
-      .filter((issue) => (args.activeOnly ? issue.active : true))
-      .filter((issue) => (args.setKey ? issue.setKey === args.setKey : true))
-      .filter((issue) =>
-        args.categoryKey ? issue.categoryKey === args.categoryKey : true,
-      )
-      .filter((issue) =>
-        args.issueType ? issue.issueType === args.issueType : true,
-      )
-      .filter((issue) => (args.includeIgnored ? true : !issue.ignoredAt))
-      .sort((left, right) => right.lastSeenAt - left.lastSeenAt)
+            .order('desc')
+            .paginate(paginationOpts)
+        }
 
-    return paginateArray(filtered, args.cursor, clampLimit(args.limit))
+        if (args.activeOnly && args.categoryKey) {
+          return await ctx.db
+            .query('pricingResolutionIssues')
+            .withIndex('by_active_categoryKey_lastSeenAt', (q) =>
+              q.eq('active', true).eq('categoryKey', args.categoryKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.activeOnly) {
+          return await ctx.db
+            .query('pricingResolutionIssues')
+            .withIndex('by_active_lastSeenAt', (q) => q.eq('active', true))
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.setKey) {
+          return await ctx.db
+            .query('pricingResolutionIssues')
+            .withIndex('by_setKey_lastSeenAt', (q) =>
+              q.eq('setKey', args.setKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        if (args.categoryKey) {
+          return await ctx.db
+            .query('pricingResolutionIssues')
+            .withIndex('by_categoryKey_lastSeenAt', (q) =>
+              q.eq('categoryKey', args.categoryKey!),
+            )
+            .order('desc')
+            .paginate(paginationOpts)
+        }
+
+        return await ctx.db
+          .query('pricingResolutionIssues')
+          .withIndex('by_lastSeenAt')
+          .order('desc')
+          .paginate(paginationOpts)
+      },
+      predicate: (issue) => matchesResolutionIssueFilters(issue, args),
+    })
   },
 })
 
@@ -359,30 +722,20 @@ export const listStaleTrackedSetKeys = internalQuery({
   handler: async (ctx, { thresholdMs, limit }) => {
     const now = Date.now()
     const maxResults = clampLimit(limit, 25, 200)
-    const activeSeries = await ctx.db
-      .query('pricingTrackedSeries')
-      .withIndex('by_active_setKey', (q) => q.eq('active', true))
-      .collect()
-
-    const distinctSetKeys = [
-      ...new Set(activeSeries.map((series) => series.setKey)),
-    ]
+    const candidateSets = await ctx.db
+      .query('catalogSets')
+      .withIndex('by_hasActiveTrackedSeries_lastSyncedAt', (q: any) =>
+        q.eq('hasActiveTrackedSeries', true),
+      )
+      .order('asc')
+      .take(Math.max(maxResults * 8, 200))
     const staleSets: Array<{
       setKey: string
       lastSyncedAt?: number
       ageMs: number
     }> = []
 
-    for (const setKey of distinctSetKeys) {
-      const set = await ctx.db
-        .query('catalogSets')
-        .withIndex('by_key', (q) => q.eq('key', setKey))
-        .unique()
-
-      if (!set) {
-        continue
-      }
-
+    for (const set of candidateSets) {
       if (set.syncStatus === 'syncing' || set.pricingSyncStatus === 'syncing') {
         continue
       }
@@ -397,7 +750,7 @@ export const listStaleTrackedSetKeys = internalQuery({
       }
 
       staleSets.push({
-        setKey,
+        setKey: set.key,
         ...(typeof set.lastSyncedAt === 'number'
           ? { lastSyncedAt: set.lastSyncedAt }
           : {}),

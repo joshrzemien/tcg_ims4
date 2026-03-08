@@ -1,6 +1,6 @@
 import { v } from 'convex/values'
 import { internal } from '../_generated/api'
-import { internalMutation, mutation } from '../_generated/server'
+import { internalAction, internalMutation, mutation } from '../_generated/server'
 import {
   buildIssueKey,
   buildSeriesKey,
@@ -18,11 +18,20 @@ import { categoryRuleAppliesToSet } from './ruleScope'
 import type { Doc, Id } from '../_generated/dataModel'
 
 type TrackingRuleDoc = Doc<'pricingTrackingRules'>
-type CatalogSetDoc = Doc<'catalogSets'>
-type PricingMutationCtx = any
+type PricingActionCtx = any
+const PRICING_SYNC_PAGE_SIZE = 250
+const PRICING_SYNC_WRITE_BATCH_SIZE = 100
 
 function buildSyncIssueKey(setKey: string) {
   return `sync:${setKey}`
+}
+
+function buildTrackedSeriesSearchText(params: {
+  name: string
+  printingLabel: string
+  catalogProductKey: string
+}) {
+  return `${params.name} ${params.printingLabel} ${params.catalogProductKey}`
 }
 
 function isActiveUnignoredIssue(issue: {
@@ -32,74 +41,44 @@ function isActiveUnignoredIssue(issue: {
   return issue.active === true && !issue.ignoredAt
 }
 
-async function countActiveJoinsForRule(
-  ctx: PricingMutationCtx,
-  ruleId: Id<'pricingTrackingRules'>,
-) {
-  let count = 0
+function chunkArray<T>(items: Array<T>, size: number) {
+  const chunks: Array<Array<T>> = []
 
-  for await (const _join of ctx.db
-    .query('pricingTrackedSeriesRules')
-    .withIndex('by_ruleId_active', (q: any) =>
-      q.eq('ruleId', ruleId).eq('active', true),
-    )) {
-    count += 1
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size))
   }
 
-  return count
+  return chunks
 }
 
-async function loadRelevantRulesForSet(
-  ctx: PricingMutationCtx,
-  set: CatalogSetDoc,
-  products: Array<Doc<'catalogProducts'>>,
-) {
-  const productKeySet = new Set(products.map((product) => product.key))
-  const [setRules, categoryRules, manualRules] = await Promise.all([
-    ctx.db
-      .query('pricingTrackingRules')
-      .withIndex('by_active_setKey', (q: any) =>
-        q.eq('active', true).eq('setKey', set.key),
-      )
-      .collect(),
-    ctx.db
-      .query('pricingTrackingRules')
-      .withIndex('by_active_categoryKey', (q: any) =>
-        q.eq('active', true).eq('categoryKey', set.categoryKey),
-      )
-      .collect(),
-    ctx.db
-      .query('pricingTrackingRules')
-      .withIndex('by_ruleType_active', (q: any) =>
-        q.eq('ruleType', 'manual_product').eq('active', true),
-      )
-      .collect(),
-  ])
+async function loadAllPages<T>(
+  ctx: PricingActionCtx,
+  queryRef: any,
+  args: Record<string, unknown>,
+): Promise<Array<T>> {
+  const results: Array<T> = []
+  let cursor: string | null = null
+  let isDone = false
 
-  const applicableCategoryRules = categoryRules.filter(
-    (rule: TrackingRuleDoc) => categoryRuleAppliesToSet(rule, set),
-  )
-  const manualRulesByProductKey = new Map<string, Array<TrackingRuleDoc>>()
+  while (!isDone) {
+    const page: {
+      page: Array<T>
+      continueCursor: string | null
+      isDone: boolean
+    } = await ctx.runQuery(queryRef, {
+      ...args,
+      paginationOpts: {
+        cursor,
+        numItems: PRICING_SYNC_PAGE_SIZE,
+      },
+    })
 
-  for (const rule of manualRules) {
-    if (
-      typeof rule.catalogProductKey !== 'string' ||
-      !productKeySet.has(rule.catalogProductKey)
-    ) {
-      continue
-    }
-
-    const productRules =
-      manualRulesByProductKey.get(rule.catalogProductKey) ?? []
-    productRules.push(rule)
-    manualRulesByProductKey.set(rule.catalogProductKey, productRules)
+    results.push(...page.page)
+    cursor = page.continueCursor
+    isDone = page.isDone
   }
 
-  return {
-    setRules,
-    categoryRules: applicableCategoryRules,
-    manualRulesByProductKey,
-  }
+  return results
 }
 
 function buildDefaultRuleLabel(params: {
@@ -207,14 +186,20 @@ export const enqueueRuleAffectedSetSyncs = internalMutation({
     const setKeys = new Set(existingJoins.map((join) => join.setKey))
 
     if (rule?.active) {
-      if (rule.ruleType === 'manual_product' && rule.catalogProductKey) {
-        const product = await ctx.db
-          .query('catalogProducts')
-          .withIndex('by_key', (q: any) => q.eq('key', rule.catalogProductKey!))
-          .unique()
+      if (rule.ruleType === 'manual_product') {
+        if (rule.setKey) {
+          setKeys.add(rule.setKey)
+        } else if (rule.catalogProductKey) {
+          const product = await ctx.db
+            .query('catalogProducts')
+            .withIndex('by_key', (q: any) =>
+              q.eq('key', rule.catalogProductKey!),
+            )
+            .unique()
 
-        if (product) {
-          setKeys.add(product.setKey)
+          if (product) {
+            setKeys.add(product.setKey)
+          }
         }
       } else if (rule.ruleType === 'set' && rule.setKey) {
         setKeys.add(rule.setKey)
@@ -246,76 +231,164 @@ export const enqueueRuleAffectedSetSyncs = internalMutation({
   },
 })
 
-export const refreshTrackedCoverageForSetMutation = internalMutation({
+export const applyTrackedSeriesCoverageBatch = internalMutation({
+  args: {
+    inserts: v.array(v.any()),
+    patches: v.array(v.any()),
+  },
+  handler: async (ctx, { inserts, patches }) => {
+    for (const insert of inserts) {
+      await ctx.db.insert('pricingTrackedSeries', insert)
+    }
+
+    for (const patch of patches) {
+      await ctx.db.patch('pricingTrackedSeries', patch.id, patch.value)
+    }
+  },
+})
+
+export const applyTrackedSeriesRuleCoverageBatch = internalMutation({
+  args: {
+    inserts: v.array(v.any()),
+    patches: v.array(v.any()),
+  },
+  handler: async (ctx, { inserts, patches }) => {
+    for (const insert of inserts) {
+      await ctx.db.insert('pricingTrackedSeriesRules', insert)
+    }
+
+    for (const patch of patches) {
+      await ctx.db.patch('pricingTrackedSeriesRules', patch.id, patch.value)
+    }
+  },
+})
+
+export const applyRuleActiveSeriesCountsBatch = internalMutation({
+  args: {
+    counts: v.array(v.any()),
+    updatedAt: v.number(),
+  },
+  handler: async (ctx, { counts, updatedAt }) => {
+    for (const count of counts) {
+      await setRuleActiveSeriesCount(
+        ctx,
+        count.ruleId,
+        count.activeSeriesCount,
+        updatedAt,
+      )
+    }
+  },
+})
+
+export const applyDashboardStatsDeltaMutation = internalMutation({
+  args: {
+    delta: v.any(),
+    updatedAt: v.number(),
+  },
+  handler: async (ctx, { delta, updatedAt }) => {
+    await applyDashboardStatsDelta(ctx, delta, updatedAt)
+  },
+})
+
+export const applySeriesSnapshotBatch = internalMutation({
+  args: {
+    historyInserts: v.array(v.any()),
+    seriesPatches: v.array(v.any()),
+    issueInserts: v.array(v.any()),
+    issuePatches: v.array(v.any()),
+  },
+  handler: async (ctx, { historyInserts, seriesPatches, issueInserts, issuePatches }) => {
+    for (const insert of historyInserts) {
+      await ctx.db.insert('pricingHistory', insert)
+    }
+
+    for (const patch of seriesPatches) {
+      await ctx.db.patch('pricingTrackedSeries', patch.id, patch.value)
+    }
+
+    for (const insert of issueInserts) {
+      await ctx.db.insert('pricingResolutionIssues', insert)
+    }
+
+    for (const patch of issuePatches) {
+      await ctx.db.patch('pricingResolutionIssues', patch.id, patch.value)
+    }
+  },
+})
+
+export const deactivateResolutionIssuesBatch = internalMutation({
+  args: {
+    issuePatches: v.array(v.any()),
+  },
+  handler: async (ctx, { issuePatches }) => {
+    for (const patch of issuePatches) {
+      await ctx.db.patch('pricingResolutionIssues', patch.id, patch.value)
+    }
+  },
+})
+
+export const refreshTrackedCoverageForSetMutation = internalAction({
   args: {
     setKey: v.string(),
   },
   handler: async (ctx, { setKey }) => {
     const now = Date.now()
-    const set = await ctx.db
-      .query('catalogSets')
-      .withIndex('by_key', (q) => q.eq('key', setKey))
-      .unique()
+    const relevantRules = await ctx.runQuery(
+      internal.pricing.queries.getRelevantRulesForSet,
+      { setKey },
+    )
 
-    if (!set) {
+    if (!relevantRules.set) {
       return { setKey, series: 0, joins: 0 }
     }
 
     const [products, existingSeries, existingJoins] = await Promise.all([
-      ctx.db
-        .query('catalogProducts')
-        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
-        .collect(),
-      ctx.db
-        .query('pricingTrackedSeries')
-        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
-        .collect(),
-      ctx.db
-        .query('pricingTrackedSeriesRules')
-        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
-        .collect(),
+      loadAllPages<Doc<'catalogProducts'>>(
+        ctx,
+        internal.pricing.queries.listCatalogProductsForSetPage,
+        { setKey },
+      ),
+      loadAllPages<Doc<'pricingTrackedSeries'>>(
+        ctx,
+        internal.pricing.queries.listTrackedSeriesForSetPage,
+        { setKey },
+      ),
+      loadAllPages<Doc<'pricingTrackedSeriesRules'>>(
+        ctx,
+        internal.pricing.queries.listTrackedSeriesRulesForSetPage,
+        { setKey },
+      ),
     ])
-    const relevantRules = await loadRelevantRulesForSet(ctx, set, products)
-    const sharedRules = [
-      ...relevantRules.setRules,
-      ...relevantRules.categoryRules,
-    ]
 
-    const desiredSeries = new Map<
-      string,
-      {
-        key: string
-        catalogProductKey: string
-        categoryKey: string
-        setKey: string
-        name: string
-        number?: string
-        rarity?: string
-        printingKey: string
-        printingLabel: string
-        skuVariantCode?: string
+    const productKeySet = new Set(products.map((product) => product.key))
+    const manualRulesByProductKey = new Map<string, Array<TrackingRuleDoc>>()
+    const sharedRules = [...relevantRules.setRules, ...relevantRules.categoryRules]
+
+    for (const rule of relevantRules.manualRules) {
+      if (
+        typeof rule.catalogProductKey !== 'string' ||
+        !productKeySet.has(rule.catalogProductKey)
+      ) {
+        continue
       }
-    >()
-    const desiredJoins = new Map<
-      string,
-      {
-        key: string
-        ruleId: Id<'pricingTrackingRules'>
-        seriesKey: string
-        setKey: string
-      }
-    >()
+
+      const productRules =
+        manualRulesByProductKey.get(rule.catalogProductKey) ?? []
+      productRules.push(rule)
+      manualRulesByProductKey.set(rule.catalogProductKey, productRules)
+    }
+
+    const desiredSeries = new Map<string, any>()
+    const desiredJoins = new Map<string, any>()
 
     for (const product of products) {
-      const manualRules =
-        relevantRules.manualRulesByProductKey.get(product.key) ?? []
+      const manualRules = manualRulesByProductKey.get(product.key) ?? []
       const productRules = [...sharedRules, ...manualRules]
       if (productRules.length === 0) {
         continue
       }
 
-      const printings = getTrackedPrintingDefinitions(product)
-      for (const printing of printings) {
+      for (const printing of getTrackedPrintingDefinitions(product)) {
         const seriesKey = buildSeriesKey(product.key, printing.printingKey)
         desiredSeries.set(seriesKey, {
           key: seriesKey,
@@ -355,24 +428,16 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
       )
     }
 
-    const existingActiveJoinCountByRule = new Map<Id<'pricingTrackingRules'>, number>()
-    for (const join of existingJoins) {
-      if (!join.active) {
-        continue
-      }
-
-      existingActiveJoinCountByRule.set(
-        join.ruleId,
-        (existingActiveJoinCountByRule.get(join.ruleId) ?? 0) + 1,
-      )
-    }
-
     const existingSeriesByKey = new Map(
       existingSeries.map((series) => [series.key, series]),
     )
     const existingJoinsByKey = new Map(
       existingJoins.map((join) => [join.key, join]),
     )
+    const seriesInserts: Array<any> = []
+    const seriesPatches: Array<any> = []
+    const joinInserts: Array<any> = []
+    const joinPatches: Array<any> = []
     let insertedSeriesCount = 0
     let activatedSeriesCount = 0
     let deactivatedSeriesCount = 0
@@ -388,29 +453,34 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
 
       if (existing) {
         if (seriesNeedsPatch(existing, nextSeries)) {
-          await ctx.db.patch('pricingTrackedSeries', existing._id, {
-            catalogProductKey: nextSeries.catalogProductKey,
-            categoryKey: nextSeries.categoryKey,
-            setKey: nextSeries.setKey,
-            name: nextSeries.name,
-            number: nextSeries.number,
-            rarity: nextSeries.rarity,
-            printingKey: nextSeries.printingKey,
-            printingLabel: nextSeries.printingLabel,
-            skuVariantCode: nextSeries.skuVariantCode,
-            activeRuleCount: nextSeries.activeRuleCount,
-            active: nextSeries.active,
-            updatedAt: now,
+          seriesPatches.push({
+            id: existing._id,
+            value: {
+              catalogProductKey: nextSeries.catalogProductKey,
+              categoryKey: nextSeries.categoryKey,
+              setKey: nextSeries.setKey,
+              searchText: buildTrackedSeriesSearchText(nextSeries),
+              name: nextSeries.name,
+              number: nextSeries.number,
+              rarity: nextSeries.rarity,
+              printingKey: nextSeries.printingKey,
+              printingLabel: nextSeries.printingLabel,
+              skuVariantCode: nextSeries.skuVariantCode,
+              activeRuleCount: nextSeries.activeRuleCount,
+              active: nextSeries.active,
+              updatedAt: now,
+            },
           })
         }
         continue
       }
 
-      await ctx.db.insert('pricingTrackedSeries', {
+      seriesInserts.push({
         key: nextSeries.key,
         catalogProductKey: nextSeries.catalogProductKey,
         categoryKey: nextSeries.categoryKey,
         setKey: nextSeries.setKey,
+        searchText: buildTrackedSeriesSearchText(nextSeries),
         name: nextSeries.name,
         number: nextSeries.number,
         rarity: nextSeries.rarity,
@@ -439,10 +509,13 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         continue
       }
 
-      await ctx.db.patch('pricingTrackedSeries', existing._id, {
-        activeRuleCount: 0,
-        active: false,
-        updatedAt: now,
+      seriesPatches.push({
+        id: existing._id,
+        value: {
+          activeRuleCount: 0,
+          active: false,
+          updatedAt: now,
+        },
       })
       if (existing.active) {
         deactivatedSeriesCount += 1
@@ -454,18 +527,21 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
 
       if (existing) {
         if (joinNeedsPatch(existing, join)) {
-          await ctx.db.patch('pricingTrackedSeriesRules', existing._id, {
-            ruleId: join.ruleId,
-            seriesKey: join.seriesKey,
-            setKey: join.setKey,
-            active: true,
-            updatedAt: now,
+          joinPatches.push({
+            id: existing._id,
+            value: {
+              ruleId: join.ruleId,
+              seriesKey: join.seriesKey,
+              setKey: join.setKey,
+              active: true,
+              updatedAt: now,
+            },
           })
         }
         continue
       }
 
-      await ctx.db.insert('pricingTrackedSeriesRules', {
+      joinInserts.push({
         key: join.key,
         ruleId: join.ruleId,
         seriesKey: join.seriesKey,
@@ -481,38 +557,102 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
         continue
       }
 
-      await ctx.db.patch('pricingTrackedSeriesRules', existing._id, {
-        active: false,
-        updatedAt: now,
+      joinPatches.push({
+        id: existing._id,
+        value: {
+          active: false,
+          updatedAt: now,
+        },
       })
     }
 
-    const affectedRuleIds = new Set<Id<'pricingTrackingRules'>>([
-      ...existingActiveJoinCountByRule.keys(),
-      ...desiredActiveJoinCountByRule.keys(),
-    ])
+    for (const inserts of chunkArray(
+      seriesInserts,
+      PRICING_SYNC_WRITE_BATCH_SIZE,
+    )) {
+      await ctx.runMutation(
+        internal.pricing.mutations.applyTrackedSeriesCoverageBatch,
+        { inserts, patches: [] },
+      )
+    }
 
-    for (const ruleId of affectedRuleIds) {
-      await setRuleActiveSeriesCount(
-        ctx,
-        ruleId,
-        await countActiveJoinsForRule(ctx, ruleId),
-        now,
+    for (const patches of chunkArray(
+      seriesPatches,
+      PRICING_SYNC_WRITE_BATCH_SIZE,
+    )) {
+      await ctx.runMutation(
+        internal.pricing.mutations.applyTrackedSeriesCoverageBatch,
+        { inserts: [], patches },
+      )
+    }
+
+    for (const inserts of chunkArray(
+      joinInserts,
+      PRICING_SYNC_WRITE_BATCH_SIZE,
+    )) {
+      await ctx.runMutation(
+        internal.pricing.mutations.applyTrackedSeriesRuleCoverageBatch,
+        { inserts, patches: [] },
+      )
+    }
+
+    for (const patches of chunkArray(
+      joinPatches,
+      PRICING_SYNC_WRITE_BATCH_SIZE,
+    )) {
+      await ctx.runMutation(
+        internal.pricing.mutations.applyTrackedSeriesRuleCoverageBatch,
+        { inserts: [], patches },
+      )
+    }
+
+    const affectedRuleCounts = [...new Set([
+      ...existingJoins.map((join) => join.ruleId),
+      ...desiredActiveJoinCountByRule.keys(),
+    ])].map((ruleId) => ({
+      ruleId,
+      activeSeriesCount: desiredActiveJoinCountByRule.get(ruleId) ?? 0,
+    }))
+
+    for (const counts of chunkArray(
+      affectedRuleCounts,
+      PRICING_SYNC_WRITE_BATCH_SIZE,
+    )) {
+      await ctx.runMutation(
+        internal.pricing.mutations.applyRuleActiveSeriesCountsBatch,
+        {
+          counts,
+          updatedAt: now,
+        },
       )
     }
 
     const totalActiveTrackedSeriesDelta =
       insertedSeriesCount + activatedSeriesCount - deactivatedSeriesCount
     if (insertedSeriesCount !== 0 || totalActiveTrackedSeriesDelta !== 0) {
-      await applyDashboardStatsDelta(
-        ctx,
+      await ctx.runMutation(
+        internal.pricing.mutations.applyDashboardStatsDeltaMutation,
         {
-          totalTrackedSeries: insertedSeriesCount,
-          totalActiveTrackedSeries: totalActiveTrackedSeriesDelta,
+          delta: {
+            totalTrackedSeries: insertedSeriesCount,
+            totalActiveTrackedSeries: totalActiveTrackedSeriesDelta,
+          },
+          updatedAt: now,
         },
-        now,
       )
     }
+
+    await ctx.runMutation(internal.catalog.mutations.recordSetPricingScopeState, {
+      setKey,
+      inRuleScope:
+        relevantRules.setRules.length > 0 ||
+        relevantRules.categoryRules.length > 0 ||
+        relevantRules.manualRules.length > 0,
+      activeTrackedSeriesCount: [...desiredJoinCountBySeries.values()].filter(
+        (count) => count > 0,
+      ).length,
+      updatedAt: now,
+    })
 
     return {
       setKey,
@@ -522,31 +662,45 @@ export const refreshTrackedCoverageForSetMutation = internalMutation({
   },
 })
 
-export const captureSeriesSnapshotsForSetMutation = internalMutation({
+export const captureSeriesSnapshotsForSetMutation = internalAction({
   args: {
     setKey: v.string(),
     capturedAt: v.number(),
   },
-  handler: async (ctx, { setKey, capturedAt }) => {
-    const [seriesRows, products, skus, existingIssues] = await Promise.all([
-      ctx.db
-        .query('pricingTrackedSeries')
-        .withIndex('by_active_setKey', (q) =>
-          q.eq('active', true).eq('setKey', setKey),
-        )
-        .collect(),
-      ctx.db
-        .query('catalogProducts')
-        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
-        .collect(),
-      ctx.db
-        .query('catalogSkus')
-        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
-        .collect(),
-      ctx.db
-        .query('pricingResolutionIssues')
-        .withIndex('by_setKey', (q) => q.eq('setKey', setKey))
-        .collect(),
+  handler: async (
+    ctx,
+    { setKey, capturedAt },
+  ): Promise<{
+    setKey: string
+    series: number
+    insertedHistory: number
+  }> => {
+    const [seriesRows, products, skus, existingIssues]: [
+      Array<Doc<'pricingTrackedSeries'>>,
+      Array<Doc<'catalogProducts'>>,
+      Array<Doc<'catalogSkus'>>,
+      Array<Doc<'pricingResolutionIssues'>>,
+    ] = await Promise.all([
+      loadAllPages<Doc<'pricingTrackedSeries'>>(
+        ctx,
+        internal.pricing.queries.listActiveTrackedSeriesForSetPage,
+        { setKey },
+      ),
+      loadAllPages<Doc<'catalogProducts'>>(
+        ctx,
+        internal.pricing.queries.listCatalogProductsForSetPage,
+        { setKey },
+      ),
+      loadAllPages<Doc<'catalogSkus'>>(
+        ctx,
+        internal.pricing.queries.listCatalogSkusForSetPage,
+        { setKey },
+      ),
+      loadAllPages<Doc<'pricingResolutionIssues'>>(
+        ctx,
+        internal.pricing.queries.listResolutionIssuesForSetPage,
+        { setKey },
+      ),
     ])
 
     const productsByKey = new Map(
@@ -564,6 +718,11 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
       skusByProductKey.set(sku.catalogProductKey, productSkus)
     }
 
+    const historyInserts: Array<any> = []
+    const seriesPatches: Array<any> = []
+    const issueInserts: Array<any> = []
+    const issuePatches: Array<any> = []
+    const issueDeactivatePatches: Array<any> = []
     let insertedHistory = 0
     let totalIssuesDelta = 0
     let totalActiveIssuesDelta = 0
@@ -588,17 +747,20 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
 
         if (existing) {
           const wasActiveUnignored = isActiveUnignoredIssue(existing)
-          await ctx.db.patch('pricingResolutionIssues', existing._id, {
-            details: issue.details,
-            lastSeenAt: capturedAt,
-            occurrenceCount: existing.occurrenceCount + 1,
-            active: true,
+          issuePatches.push({
+            id: existing._id,
+            value: {
+              details: issue.details,
+              lastSeenAt: capturedAt,
+              occurrenceCount: existing.occurrenceCount + 1,
+              active: true,
+            },
           })
           if (!wasActiveUnignored && !existing.ignoredAt) {
             totalActiveIssuesDelta += 1
           }
         } else {
-          await ctx.db.insert('pricingResolutionIssues', {
+          issueInserts.push({
             key,
             catalogProductKey: series.catalogProductKey,
             seriesKey: series.key,
@@ -610,6 +772,7 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
             lastSeenAt: capturedAt,
             occurrenceCount: 1,
             active: true,
+            isIgnored: false,
             ignoredAt: undefined,
           })
           totalIssuesDelta += 1
@@ -636,7 +799,7 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
         snapshot.snapshotFingerprint !== series.lastSnapshotFingerprint
 
       if (snapshot.pricingSource !== 'unavailable' && historyChanged) {
-        await ctx.db.insert('pricingHistory', {
+        historyInserts.push({
           seriesKey: series.key,
           capturedAt,
           effectiveAt: snapshot.effectiveAt,
@@ -648,21 +811,26 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
           manapoolPriceCents: snapshot.manapoolPriceCents,
           manapoolQuantity: snapshot.manapoolQuantity,
         })
-        insertedHistory += 1
-
-        await ctx.db.patch('pricingTrackedSeries', series._id, {
-          ...basePatch,
-          lastSnapshotFingerprint: snapshot.snapshotFingerprint,
-          lastSnapshotAt: capturedAt,
-          updatedAt: capturedAt,
+        seriesPatches.push({
+          id: series._id,
+          value: {
+            ...basePatch,
+            lastSnapshotFingerprint: snapshot.snapshotFingerprint,
+            lastSnapshotAt: capturedAt,
+            updatedAt: capturedAt,
+          },
         })
+        insertedHistory += 1
         continue
       }
 
       if (snapshotChanged) {
-        await ctx.db.patch('pricingTrackedSeries', series._id, {
-          ...basePatch,
-          updatedAt: capturedAt,
+        seriesPatches.push({
+          id: series._id,
+          value: {
+            ...basePatch,
+            updatedAt: capturedAt,
+          },
         })
       }
     }
@@ -672,23 +840,73 @@ export const captureSeriesSnapshotsForSetMutation = internalMutation({
         continue
       }
 
-      await ctx.db.patch('pricingResolutionIssues', existing._id, {
-        active: false,
-        lastSeenAt: capturedAt,
+      issueDeactivatePatches.push({
+        id: existing._id,
+        value: {
+          active: false,
+          lastSeenAt: capturedAt,
+        },
       })
       if (isActiveUnignoredIssue(existing)) {
         totalActiveIssuesDelta -= 1
       }
     }
 
-    if (totalIssuesDelta !== 0 || totalActiveIssuesDelta !== 0) {
-      await applyDashboardStatsDelta(
-        ctx,
+    const batchCount = Math.max(
+      historyInserts.length,
+      seriesPatches.length,
+      issueInserts.length,
+      issuePatches.length,
+    )
+    const batchIterations = Math.max(
+      1,
+      Math.ceil(batchCount / PRICING_SYNC_WRITE_BATCH_SIZE),
+    )
+
+    for (let index = 0; index < batchIterations; index += 1) {
+      const start = index * PRICING_SYNC_WRITE_BATCH_SIZE
+      await ctx.runMutation(internal.pricing.mutations.applySeriesSnapshotBatch, {
+        historyInserts: historyInserts.slice(
+          start,
+          start + PRICING_SYNC_WRITE_BATCH_SIZE,
+        ),
+        seriesPatches: seriesPatches.slice(
+          start,
+          start + PRICING_SYNC_WRITE_BATCH_SIZE,
+        ),
+        issueInserts: issueInserts.slice(
+          start,
+          start + PRICING_SYNC_WRITE_BATCH_SIZE,
+        ),
+        issuePatches: issuePatches.slice(
+          start,
+          start + PRICING_SYNC_WRITE_BATCH_SIZE,
+        ),
+      })
+    }
+
+    for (const issuePatchesBatch of chunkArray(
+      issueDeactivatePatches,
+      PRICING_SYNC_WRITE_BATCH_SIZE,
+    )) {
+      await ctx.runMutation(
+        internal.pricing.mutations.deactivateResolutionIssuesBatch,
         {
-          totalIssues: totalIssuesDelta,
-          totalActiveIssues: totalActiveIssuesDelta,
+          issuePatches: issuePatchesBatch,
         },
-        capturedAt,
+      )
+    }
+
+    if (totalIssuesDelta !== 0 || totalActiveIssuesDelta !== 0) {
+      await ctx.runMutation(
+        internal.pricing.mutations.applyDashboardStatsDeltaMutation,
+        {
+          delta: {
+            totalIssues: totalIssuesDelta,
+            totalActiveIssues: totalActiveIssuesDelta,
+          },
+          updatedAt: capturedAt,
+        },
       )
     }
 
@@ -765,6 +983,7 @@ export const upsertSyncIssue = internalMutation({
       lastSeenAt: failedAt,
       occurrenceCount: 1,
       active: true,
+      isIgnored: false,
       ignoredAt: undefined,
     })
     await applyDashboardStatsDelta(
@@ -865,6 +1084,7 @@ export const backfillSyncIssues = mutation({
           lastSeenAt: set.updatedAt,
           occurrenceCount: set.consecutiveSyncFailures ?? 1,
           active: true,
+          isIgnored: false,
           ignoredAt: undefined,
         })
         totalIssuesDelta += 1
@@ -898,6 +1118,7 @@ export const setIssueIgnored = mutation({
 
     const updatedAt = Date.now()
     await ctx.db.patch('pricingResolutionIssues', issueId, {
+      isIgnored: ignored,
       ignoredAt: ignored ? updatedAt : undefined,
     })
     if (issue.active) {
@@ -999,6 +1220,8 @@ export const createManualProductRule = mutation({
           name: product.name,
         }),
       active: true,
+      categoryKey: product.categoryKey,
+      setKey: product.setKey,
       catalogProductKey,
       createdAt: now,
       updatedAt: now,

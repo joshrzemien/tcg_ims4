@@ -516,11 +516,11 @@ async function processSetSyncInternal(
     })
 
     try {
-      coverage = await ctx.runMutation(
+      coverage = await ctx.runAction(
         internal.pricing.mutations.refreshTrackedCoverageForSetMutation,
         { setKey },
       )
-      snapshots = await ctx.runMutation(
+      snapshots = await ctx.runAction(
         internal.pricing.mutations.captureSeriesSnapshotsForSetMutation,
         {
           setKey,
@@ -617,22 +617,19 @@ async function runCatalogWindow(
   }
 
   const candidates: Array<{ key: string; syncPriority: number }> =
-    await ctx.runQuery(api.catalog.queries.listSyncCandidates, {
+    await ctx.runMutation(internal.catalog.mutations.claimSyncCandidates, {
       limit: maxSets,
     })
 
   const queuedSetKeys: Array<string> = []
 
   for (const candidate of candidates) {
-    const result = await requestSetSyncInternal(ctx, {
+    await ctx.scheduler.runAfter(0, internal.catalog.sync.processSetSync, {
       setKey: candidate.key,
       mode: 'full',
       reason: 'catalog_window',
     })
-
-    if (result.scheduled) {
-      queuedSetKeys.push(candidate.key)
-    }
+    queuedSetKeys.push(candidate.key)
   }
 
   return {

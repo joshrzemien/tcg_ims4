@@ -11,17 +11,12 @@ import type { ActionCtx } from "../_generated/server";
 import type { OrderRecord } from "./types";
 
 const CATALOG_LINK_BACKFILL_BATCH_SIZE = 50;
+const ORDER_UPSERT_BATCH_SIZE = 25;
 
-async function upsertAll(ctx: ActionCtx, orders: Array<OrderRecord>) {
-  for (const order of orders) {
-    await ctx.runMutation(internal.orders.mutations.upsertOrder, { order });
-  }
-}
-
-async function upsertAllDailyBatch(
+async function upsertAllInBatches(
   ctx: ActionCtx,
   orders: Array<OrderRecord>,
-  chunkSize = 25
+  chunkSize = ORDER_UPSERT_BATCH_SIZE
 ) {
   for (let i = 0; i < orders.length; i += chunkSize) {
     const batch = orders.slice(i, i + chunkSize);
@@ -35,7 +30,7 @@ export const syncActive = internalAction({
     const orders = await fetchManapoolOrders({ unfulfilledOnly: true });
     const tcgplayerOrders = await fetchTcgplayerOrders({ unfulfilledOnly: true });
     const allOrders = [...orders, ...tcgplayerOrders];
-    await upsertAll(ctx, allOrders);
+    await upsertAllInBatches(ctx, allOrders);
     return { synced: allOrders.length };
   },
 });
@@ -47,7 +42,7 @@ export const syncRecent = internalAction({
     const orders = await fetchManapoolOrders({ since });
     const tcgplayerOrders = await fetchTcgplayerOrders({ since });
     const allOrders = [...orders, ...tcgplayerOrders];
-    await upsertAll(ctx, allOrders);
+    await upsertAllInBatches(ctx, allOrders);
     return { synced: allOrders.length };
   },
 });
@@ -59,7 +54,7 @@ export const syncArchive = internalAction({
     const orders = await fetchManapoolOrders({ since, batchDetails: true });
     const tcgplayerOrders = await fetchTcgplayerOrders({ since, batchDetails: true });
     const allOrders = [...orders, ...tcgplayerOrders];
-    await upsertAllDailyBatch(ctx, allOrders);
+    await upsertAllInBatches(ctx, allOrders);
     return { synced: allOrders.length };
   },
 });

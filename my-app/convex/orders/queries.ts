@@ -1,6 +1,6 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
-import { query } from '../_generated/server'
+import { internalQuery, query } from '../_generated/server'
 import { readMaterializedOrderShipmentState } from './shipmentSummary'
 import type { Doc } from '../_generated/dataModel'
 import type { OrderShipmentState } from './shipmentSummary'
@@ -142,5 +142,22 @@ export const getById = query({
   args: { orderId: v.id('orders') },
   handler: async (ctx, { orderId }) => {
     return await ctx.db.get('orders', orderId)
+  },
+})
+
+export const listWindowPage = internalQuery({
+  args: {
+    fromCreatedAt: v.number(),
+    toCreatedAt: v.number(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, { fromCreatedAt, toCreatedAt, paginationOpts }) => {
+    return await ctx.db
+      .query('orders')
+      .withIndex('by_createdAt', (q: any) =>
+        q.gte('createdAt', fromCreatedAt).lte('createdAt', toCreatedAt),
+      )
+      .order('desc')
+      .paginate(paginationOpts)
   },
 })
