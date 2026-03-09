@@ -58,15 +58,36 @@ const orderItemProductTypeValidator = v.union(
   v.literal('mtg_sealed'),
 )
 
-const inventoryTypeValidator = v.union(
+const inventoryClassValidator = v.union(
   v.literal('single'),
   v.literal('sealed'),
+  v.literal('graded'),
 )
 
-const inventoryMetadataFieldValidator = v.object({
-  key: v.string(),
-  value: v.string(),
-})
+const inventoryLocationKindValidator = v.union(
+  v.literal('physical'),
+  v.literal('system'),
+)
+
+const inventoryReferenceKindValidator = v.literal('catalog')
+
+const inventoryWorkflowStatusValidator = v.union(
+  v.literal('available'),
+  v.literal('processing'),
+  v.literal('hold'),
+)
+
+const inventoryUnitKindValidator = v.literal('graded_card')
+
+const inventoryEventTypeValidator = v.union(
+  v.literal('migration_seed'),
+  v.literal('receive'),
+  v.literal('adjust'),
+  v.literal('move'),
+  v.literal('status_change'),
+  v.literal('unit_detail_upserted'),
+  v.literal('content_deleted'),
+)
 
 const setSyncModeValidator = v.union(
   v.literal('full'),
@@ -416,20 +437,96 @@ export default defineSchema({
     activeSeriesCount: v.number(),
     updatedAt: v.number(),
   }).index('by_key', ['key']),
-  inventoryItems: defineTable({
-    inventoryType: inventoryTypeValidator,
-    catalogProductKey: v.string(),
-    catalogSkuKey: v.optional(v.string()),
-    quantity: v.number(),
-    location: v.optional(v.string()),
+  inventoryLocations: defineTable({
+    code: v.string(),
+    kind: inventoryLocationKindValidator,
+    parentLocationId: v.optional(v.id('inventoryLocations')),
+    pathSegments: v.array(v.string()),
+    depth: v.number(),
+    acceptsContents: v.boolean(),
+    displayName: v.optional(v.string()),
     notes: v.optional(v.string()),
-    metadataFields: v.optional(v.array(inventoryMetadataFieldValidator)),
+    active: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index('by_inventoryType_updatedAt', ['inventoryType', 'updatedAt'])
+    .index('by_code', ['code'])
+    .index('by_parentLocationId', ['parentLocationId'])
+    .index('by_active', ['active'])
+    .index('by_acceptsContents', ['acceptsContents'])
+    .index('by_kind', ['kind']),
+  inventoryLocationContents: defineTable({
+    locationId: v.id('inventoryLocations'),
+    inventoryClass: inventoryClassValidator,
+    referenceKind: inventoryReferenceKindValidator,
+    catalogProductKey: v.string(),
+    catalogSkuKey: v.optional(v.string()),
+    quantity: v.number(),
+    workflowStatus: inventoryWorkflowStatusValidator,
+    workflowTag: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    contentIdentityKey: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_locationId', ['locationId'])
     .index('by_catalogProductKey', ['catalogProductKey'])
-    .index('by_catalogSkuKey', ['catalogSkuKey']),
+    .index('by_catalogSkuKey', ['catalogSkuKey'])
+    .index('by_inventoryClass', ['inventoryClass'])
+    .index('by_inventoryClass_catalogProductKey', [
+      'inventoryClass',
+      'catalogProductKey',
+    ])
+    .index('by_inventoryClass_catalogSkuKey', [
+      'inventoryClass',
+      'catalogSkuKey',
+    ])
+    .index('by_workflowStatus', ['workflowStatus'])
+    .index('by_contentIdentityKey', ['contentIdentityKey']),
+  inventoryUnitDetails: defineTable({
+    contentId: v.id('inventoryLocationContents'),
+    unitKind: inventoryUnitKindValidator,
+    gradingCompany: v.string(),
+    gradeLabel: v.string(),
+    gradeSortValue: v.optional(v.number()),
+    certNumber: v.string(),
+    notes: v.optional(v.string()),
+    unitIdentityKey: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_contentId', ['contentId'])
+    .index('by_unitIdentityKey', ['unitIdentityKey']),
+  inventoryEvents: defineTable({
+    eventType: inventoryEventTypeValidator,
+    occurredAt: v.number(),
+    actor: v.optional(v.string()),
+    reasonCode: v.optional(v.string()),
+    sourceContentId: v.optional(v.id('inventoryLocationContents')),
+    targetContentId: v.optional(v.id('inventoryLocationContents')),
+    fromLocationId: v.optional(v.id('inventoryLocations')),
+    toLocationId: v.optional(v.id('inventoryLocations')),
+    inventoryClass: inventoryClassValidator,
+    referenceKind: inventoryReferenceKindValidator,
+    catalogProductKey: v.string(),
+    catalogSkuKey: v.optional(v.string()),
+    quantityDelta: v.number(),
+    quantityBefore: v.optional(v.number()),
+    quantityAfter: v.optional(v.number()),
+    workflowStatusBefore: v.optional(inventoryWorkflowStatusValidator),
+    workflowStatusAfter: v.optional(inventoryWorkflowStatusValidator),
+    workflowTagBefore: v.optional(v.string()),
+    workflowTagAfter: v.optional(v.string()),
+    unitIdentityKey: v.optional(v.string()),
+    metadataSnapshot: v.optional(v.any()),
+  })
+    .index('by_occurredAt', ['occurredAt'])
+    .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_catalogSkuKey', ['catalogSkuKey'])
+    .index('by_inventoryClass_occurredAt', ['inventoryClass', 'occurredAt'])
+    .index('by_fromLocationId_occurredAt', ['fromLocationId', 'occurredAt'])
+    .index('by_toLocationId_occurredAt', ['toLocationId', 'occurredAt'])
+    .index('by_eventType', ['eventType']),
   shipments: defineTable({
     orderId: v.optional(v.id('orders')),
     status: shippingStatusValidator, // Canonical EasyPost-derived order shipping status

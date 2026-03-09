@@ -3,7 +3,7 @@
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ItemFormFields } from '../../../../src/components/InventoryDashboard'
+import { ProductPicker } from '../../../../src/components/InventoryDashboard'
 import { CreateRuleModal } from '../../../../src/components/PricingDashboard'
 
 const {
@@ -89,23 +89,17 @@ describe('picker search components', () => {
 
   it('does not query picker product search until 2 normalized characters and clears cleanly', () => {
     render(
-      <ItemFormFields
+      <ProductPicker
         selectedProductKey=""
         selectedProductName=""
         onSelectProduct={vi.fn()}
         onClearProduct={vi.fn()}
-        quantity="1"
-        onQuantityChange={vi.fn()}
-        location=""
-        onLocationChange={vi.fn()}
-        notes=""
-        onNotesChange={vi.fn()}
       />,
     )
 
-    const input = screen.getByPlaceholderText('Search by product name...')
+    const input = screen.getByPlaceholderText('Search catalog products...')
 
-    expect(screen.getByText('Type at least 2 characters.')).toBeTruthy()
+    expect(screen.getAllByText('Type at least 2 characters.').length).toBeGreaterThan(0)
 
     fireEvent.change(input, { target: { value: 'B' } })
     act(() => {
@@ -156,7 +150,7 @@ describe('picker search components', () => {
     fireEvent.click(screen.getByLabelText('Clear search'))
 
     expect(screen.queryByText('Black Lotus')).toBeNull()
-    expect(screen.getByText('Type at least 2 characters.')).toBeTruthy()
+    expect(screen.getAllByText('Type at least 2 characters.').length).toBeGreaterThan(0)
   })
 
   it('keeps set picker idle on open and only searches after 2 characters', () => {

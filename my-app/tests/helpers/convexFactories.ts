@@ -140,14 +140,50 @@ export function buildShipment(
   })
 }
 
-export function buildInventoryItem(
-  overrides: DocOverrides<'inventoryItems'> = {},
-): Doc<'inventoryItems'> {
-  return createDoc<'inventoryItems'>({
-    inventoryType: 'single',
+export function buildInventoryLocation(
+  overrides: DocOverrides<'inventoryLocations'> = {},
+): Doc<'inventoryLocations'> {
+  return createDoc<'inventoryLocations'>({
+    code: '01:01:01:01:01:01',
+    kind: 'physical',
+    pathSegments: ['01', '01', '01', '01', '01', '01'],
+    depth: 6,
+    acceptsContents: true,
+    active: true,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  })
+}
+
+export function buildInventoryLocationContent(
+  overrides: DocOverrides<'inventoryLocationContents'> = {},
+): Doc<'inventoryLocationContents'> {
+  return createDoc<'inventoryLocationContents'>({
+    locationId: createId<'inventoryLocations'>('location-1'),
+    inventoryClass: 'single',
+    referenceKind: 'catalog',
     catalogProductKey: 'product-1',
     catalogSkuKey: 'sku-1',
     quantity: 1,
+    workflowStatus: 'available',
+    contentIdentityKey: 'catalog|location-1|single|product-1|sku-1',
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  })
+}
+
+export function buildInventoryUnitDetail(
+  overrides: DocOverrides<'inventoryUnitDetails'> = {},
+): Doc<'inventoryUnitDetails'> {
+  return createDoc<'inventoryUnitDetails'>({
+    contentId: createId<'inventoryLocationContents'>('content-1'),
+    unitKind: 'graded_card',
+    gradingCompany: 'PSA',
+    gradeLabel: '10',
+    certNumber: '12345',
+    unitIdentityKey: 'PSA|12345',
     createdAt: 1,
     updatedAt: 1,
     ...overrides,

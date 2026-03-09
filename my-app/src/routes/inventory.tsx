@@ -11,7 +11,7 @@ function InventoryPage() {
     <AppShell
       activeNav="inventory"
       pageTitle="Inventory"
-      pageDescription="Track sealed product and singles in your collection."
+      pageDescription="Track singles, sealed product, and graded inventory by physical location."
     >
       <InventoryDashboard />
     </AppShell>
