@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAction, useMutation, useQuery } from 'convex/react'
 import {
   AlertTriangle,
@@ -9,7 +9,6 @@ import {
   Layers,
   Plus,
   RotateCw,
-  Search,
   Trash2,
   TrendingUp,
   X,
@@ -17,6 +16,7 @@ import {
 import { api } from '../../convex/_generated/api'
 import type { Doc, Id } from '../../convex/_generated/dataModel'
 import { Button } from '~/components/ui/button'
+import { SearchField } from '~/components/ui/search-field'
 import {
   Table,
   TableBody,
@@ -30,7 +30,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '~/components/ui/tooltip'
+import { useSearchController } from '~/hooks/useSearchController'
 import { cn } from '~/lib/utils'
+import { normalizeSearchInput } from '~/lib/search'
 
 // -- Types --
 
@@ -126,6 +128,8 @@ function humanize(value: string) {
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error'
 }
+
+const PICKER_HELPER_TEXT = 'Type at least 2 characters.'
 
 // -- Style Maps --
 
@@ -681,17 +685,37 @@ function RulesTab({
 
 // -- Series Tab --
 
-function SeriesTab(_props: {
-  onFlash: (msg: FlashMessage) => void
+export function SeriesTab({
+  committedSearch,
+  activeOnly,
+  onCommittedSearchChange,
+  onActiveOnlyChange,
+}: {
+  committedSearch: string
+  activeOnly: boolean
+  onCommittedSearchChange: (value: string) => void
+  onActiveOnlyChange: (value: boolean) => void
 }) {
-  const [searchText, setSearchText] = useState('')
-  const [activeOnly, setActiveOnly] = useState(true)
   const [cursor, setCursor] = useState<string | null>(null)
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  const search = useSearchController({
+    kind: 'page',
+    initialValue: committedSearch,
+  })
+
+  useEffect(() => {
+    if (search.committedValue !== normalizeSearchInput(committedSearch)) {
+      onCommittedSearchChange(search.committedValue)
+    }
+  }, [committedSearch, onCommittedSearchChange, search.committedValue])
+
+  useEffect(() => {
+    setCursor(null)
+  }, [activeOnly, committedSearch])
 
   const seriesPage = useQuery(api.pricing.queries.listTrackedSeries, {
     activeOnly,
-    search: searchText || undefined,
+    search: committedSearch || undefined,
     paginationOpts: {
       cursor,
       numItems: 50,
@@ -705,17 +729,13 @@ function SeriesTab(_props: {
     <div className="space-y-2">
       {/* Filters */}
       <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-          <input
-            type="text"
+        <div className="flex-1">
+          <SearchField
+            value={search.rawValue}
+            onValueChange={search.setRawValue}
+            onClear={search.clear}
             placeholder="Search by name, printing, or product key..."
-            value={searchText}
-            onChange={(e) => {
-              setSearchText(e.target.value)
-              setCursor(null)
-            }}
-            className="h-7 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+            size="xs"
           />
         </div>
         <button
@@ -727,8 +747,7 @@ function SeriesTab(_props: {
               : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
           )}
           onClick={() => {
-            setActiveOnly(!activeOnly)
-            setCursor(null)
+            onActiveOnlyChange(!activeOnly)
           }}
         >
           Active Only
@@ -1302,7 +1321,7 @@ function IssuesTab({ onFlash }: { onFlash: (msg: FlashMessage) => void }) {
 
 // -- Create Rule Modal --
 
-function CreateRuleModal({
+export function CreateRuleModal({
   onClose,
   onFlash,
 }: {
@@ -1315,26 +1334,28 @@ function CreateRuleModal({
   const [seedExisting, setSeedExisting] = useState(true)
   const [autoTrack, setAutoTrack] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [searchText, setSearchText] = useState('')
+  const productSearch = useSearchController({ kind: 'picker' })
+  const categorySearch = useSearchController({ kind: 'picker' })
+  const setSearch = useSearchController({ kind: 'picker' })
 
   const createManualProductRule = useMutation(api.pricing.mutations.createManualProductRule)
   const createSetRule = useMutation(api.pricing.mutations.createSetRule)
   const createCategoryRule = useMutation(api.pricing.mutations.createCategoryRule)
 
   const categories = useQuery(
-    api.catalog.queries.listCategories,
-    ruleType === 'category'
+    api.catalog.queries.searchCategories,
+    ruleType === 'category' && categorySearch.committedValue
       ? {
-          search: searchText.trim() || undefined,
+          search: categorySearch.committedValue,
           limit: 25,
         }
       : 'skip',
   )
   const sets = useQuery(
-    api.catalog.queries.listSets,
-    ruleType === 'set'
+    api.catalog.queries.searchSets,
+    ruleType === 'set' && setSearch.committedValue
       ? {
-          search: searchText.trim() || undefined,
+          search: setSearch.committedValue,
           limit: 25,
         }
       : 'skip',
@@ -1346,8 +1367,8 @@ function CreateRuleModal({
 
   const searchResults = useQuery(
     api.pricing.queries.searchCatalogProducts,
-    ruleType === 'manual_product' && searchText.trim().length >= 2
-      ? { search: searchText, limit: 10 }
+    ruleType === 'manual_product' && productSearch.committedValue
+      ? { search: productSearch.committedValue, limit: 10 }
       : 'skip',
   )
 
@@ -1414,7 +1435,9 @@ function CreateRuleModal({
                 onClick={() => {
                   setRuleType(value)
                   setKeyValue('')
-                  setSearchText('')
+                  productSearch.clear()
+                  categorySearch.clear()
+                  setSearch.clear()
                 }}
               >
                 {lbl}
@@ -1429,17 +1452,26 @@ function CreateRuleModal({
             <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Search Product
             </label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search by card name..."
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
-              />
-            </div>
-            {searchResults && searchResults.length > 0 && (
+            <SearchField
+              value={productSearch.rawValue}
+              onValueChange={productSearch.setRawValue}
+              onClear={productSearch.clear}
+              placeholder="Search by card name..."
+              helperText={productSearch.isReady ? undefined : PICKER_HELPER_TEXT}
+            />
+            {productSearch.committedValue && !searchResults ? (
+              <div className="space-y-px rounded border bg-background p-1">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="h-8 animate-pulse rounded bg-muted/10"
+                  />
+                ))}
+              </div>
+            ) : null}
+            {productSearch.committedValue &&
+              searchResults &&
+              searchResults.length > 0 && (
               <div className="max-h-40 overflow-y-auto rounded border bg-background">
                 {searchResults.map((product) => (
                   <button
@@ -1452,6 +1484,7 @@ function CreateRuleModal({
                     )}
                     onClick={() => {
                       setKeyValue(product.key)
+                      productSearch.clear()
                       if (!label) setLabel(`Track ${product.name}`)
                     }}
                   >
@@ -1465,6 +1498,13 @@ function CreateRuleModal({
                 ))}
               </div>
             )}
+            {productSearch.committedValue &&
+              searchResults &&
+              searchResults.length === 0 && (
+                <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                  No products match the current search.
+                </p>
+              )}
             {keyValue && (
               <p className="text-[10px] text-muted-foreground">
                 Selected:{' '}
@@ -1480,56 +1520,54 @@ function CreateRuleModal({
             <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Category
             </label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search categories..."
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
-              />
-            </div>
-            <div className="max-h-40 overflow-y-auto rounded border bg-background">
-              {!categories ? (
-                <div className="space-y-px p-1">
-                  {Array.from({ length: 4 }).map((_, index) => (
-                    <div
-                      key={index}
-                      className="h-8 animate-pulse rounded bg-muted/10"
-                    />
-                  ))}
-                </div>
-              ) : categories.length === 0 ? (
-                <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-                  {searchText.trim()
-                    ? 'No categories match the current search.'
-                    : 'No categories available.'}
-                </p>
-              ) : (
-                categories.map((cat) => (
-                  <button
-                    key={cat.key}
-                    type="button"
-                    className={cn(
-                      'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
-                      keyValue === cat.key && 'bg-primary/10 text-primary',
-                    )}
-                    onClick={() => {
-                      setKeyValue(cat.key)
-                      if (!label) setLabel(`Track category ${cat.displayName}`)
-                    }}
-                  >
-                    <span className="flex-1 truncate font-medium">
-                      {cat.displayName}
-                    </span>
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {cat.setCount} sets · {cat.productCount.toLocaleString()} products
-                    </span>
-                  </button>
-                ))
-              )}
-            </div>
+            <SearchField
+              value={categorySearch.rawValue}
+              onValueChange={categorySearch.setRawValue}
+              onClear={categorySearch.clear}
+              placeholder="Search categories..."
+              helperText={categorySearch.isReady ? undefined : PICKER_HELPER_TEXT}
+            />
+            {categorySearch.committedValue && (
+              <div className="max-h-40 overflow-y-auto rounded border bg-background">
+                {!categories ? (
+                  <div className="space-y-px p-1">
+                    {Array.from({ length: 4 }).map((_, index) => (
+                      <div
+                        key={index}
+                        className="h-8 animate-pulse rounded bg-muted/10"
+                      />
+                    ))}
+                  </div>
+                ) : categories.length === 0 ? (
+                  <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                    No categories match the current search.
+                  </p>
+                ) : (
+                  categories.map((cat) => (
+                    <button
+                      key={cat.key}
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
+                        keyValue === cat.key && 'bg-primary/10 text-primary',
+                      )}
+                      onClick={() => {
+                        setKeyValue(cat.key)
+                        categorySearch.clear()
+                        if (!label) setLabel(`Track category ${cat.displayName}`)
+                      }}
+                    >
+                      <span className="flex-1 truncate font-medium">
+                        {cat.displayName}
+                      </span>
+                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                        {cat.setCount} sets · {cat.productCount.toLocaleString()} products
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
             {keyValue && (
               <p className="text-[10px] text-muted-foreground">
                 Selected:{' '}
@@ -1545,56 +1583,54 @@ function CreateRuleModal({
             <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Set
             </label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search sets..."
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                className="h-8 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
-              />
-            </div>
-            <div className="max-h-48 overflow-y-auto rounded border bg-background">
-              {!sets ? (
-                <div className="space-y-px p-1">
-                  {Array.from({ length: 5 }).map((_, index) => (
-                    <div
-                      key={index}
-                      className="h-8 animate-pulse rounded bg-muted/10"
-                    />
-                  ))}
-                </div>
-              ) : sets.length === 0 ? (
-                <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-                  {searchText.trim()
-                    ? 'No sets match the current search.'
-                    : 'No sets available.'}
-                </p>
-              ) : (
-                sets.map((set) => (
-                  <button
-                    key={set.key}
-                    type="button"
-                    className={cn(
-                      'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
-                      keyValue === set.key && 'bg-primary/10 text-primary',
-                    )}
-                    onClick={() => {
-                      setKeyValue(set.key)
-                      if (!label) setLabel(`Track set ${set.name}`)
-                    }}
-                  >
-                    <span className="flex-1 truncate font-medium">
-                      {set.label}
-                    </span>
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {set.productCount.toLocaleString()} products
-                    </span>
-                  </button>
-                ))
-              )}
-            </div>
+            <SearchField
+              value={setSearch.rawValue}
+              onValueChange={setSearch.setRawValue}
+              onClear={setSearch.clear}
+              placeholder="Search sets..."
+              helperText={setSearch.isReady ? undefined : PICKER_HELPER_TEXT}
+            />
+            {setSearch.committedValue && (
+              <div className="max-h-48 overflow-y-auto rounded border bg-background">
+                {!sets ? (
+                  <div className="space-y-px p-1">
+                    {Array.from({ length: 5 }).map((_, index) => (
+                      <div
+                        key={index}
+                        className="h-8 animate-pulse rounded bg-muted/10"
+                      />
+                    ))}
+                  </div>
+                ) : sets.length === 0 ? (
+                  <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                    No sets match the current search.
+                  </p>
+                ) : (
+                  sets.map((set) => (
+                    <button
+                      key={set.key}
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/30',
+                        keyValue === set.key && 'bg-primary/10 text-primary',
+                      )}
+                      onClick={() => {
+                        setKeyValue(set.key)
+                        setSearch.clear()
+                        if (!label) setLabel(`Track set ${set.name}`)
+                      }}
+                    >
+                      <span className="flex-1 truncate font-medium">
+                        {set.label}
+                      </span>
+                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                        {set.productCount.toLocaleString()} products
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
             {/* Sync status detail for selected set */}
             {keyValue &&
               (() => {
@@ -1700,7 +1736,17 @@ function CreateRuleModal({
 
 // -- Main Dashboard --
 
-export function PricingDashboard() {
+export function PricingDashboard({
+  committedSeriesSearch,
+  seriesActiveOnly,
+  onCommittedSeriesSearchChange,
+  onSeriesActiveOnlyChange,
+}: {
+  committedSeriesSearch: string
+  seriesActiveOnly: boolean
+  onCommittedSeriesSearchChange: (value: string) => void
+  onSeriesActiveOnlyChange: (value: boolean) => void
+}) {
   const [activeTab, setActiveTab] = useState<TabKey>('rules')
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -1801,7 +1847,14 @@ export function PricingDashboard() {
       {activeTab === 'rules' && (
         <RulesTab rules={rules} onFlash={handleFlash} />
       )}
-      {activeTab === 'series' && <SeriesTab onFlash={handleFlash} />}
+      {activeTab === 'series' && (
+        <SeriesTab
+          committedSearch={committedSeriesSearch}
+          activeOnly={seriesActiveOnly}
+          onCommittedSearchChange={onCommittedSeriesSearchChange}
+          onActiveOnlyChange={onSeriesActiveOnlyChange}
+        />
+      )}
       {activeTab === 'issues' && <IssuesTab onFlash={handleFlash} />}
 
       {/* Create Rule Modal */}

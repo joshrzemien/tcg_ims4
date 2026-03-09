@@ -227,6 +227,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index('by_key', ['key'])
+    .index('by_cleanName', ['cleanName'])
     .index('by_tcgplayerProductId', ['tcgplayerProductId'])
     .index('by_setKey', ['setKey'])
     .index('by_setKey_lastIngestedAt', ['setKey', 'lastIngestedAt'])

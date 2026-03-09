@@ -7,7 +7,6 @@ import {
   Hash,
   Pencil,
   Plus,
-  Search,
   Trash2,
   TrendingUp,
   X,
@@ -15,6 +14,8 @@ import {
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { Button } from '~/components/ui/button'
+import { SearchField } from '~/components/ui/search-field'
+import { useSearchController } from '~/hooks/useSearchController'
 import {
   Table,
   TableBody,
@@ -65,6 +66,8 @@ function relativeTime(ts: number | undefined) {
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown error'
 }
+
+const PICKER_HELPER_TEXT = 'Type at least 2 characters.'
 
 // -- Shared Components --
 
@@ -214,7 +217,7 @@ function InventoryStatsBar({
 
 // -- Item Form Fields (shared between Add & Edit modals) --
 
-function ItemFormFields({
+export function ItemFormFields({
   selectedProductKey,
   selectedProductName,
   onSelectProduct,
@@ -239,12 +242,12 @@ function ItemFormFields({
   onNotesChange: (value: string) => void
   productLocked?: boolean
 }) {
-  const [searchText, setSearchText] = useState('')
+  const productSearch = useSearchController({ kind: 'picker' })
 
   const searchResults = useQuery(
     api.pricing.queries.searchCatalogProducts,
-    !productLocked && searchText.trim().length >= 2
-      ? { search: searchText, limit: 10 }
+    !productLocked && productSearch.committedValue
+      ? { search: productSearch.committedValue, limit: 10 }
       : 'skip',
   )
 
@@ -266,7 +269,7 @@ function ItemFormFields({
                 className="rounded p-0.5 text-muted-foreground hover:text-foreground"
                 onClick={() => {
                   onClearProduct()
-                  setSearchText('')
+                  productSearch.clear()
                 }}
               >
                 <X className="size-3" />
@@ -275,18 +278,28 @@ function ItemFormFields({
           </div>
         ) : (
           <>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search by product name..."
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                className="h-7 w-full rounded border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
-                autoFocus
-              />
-            </div>
-            {searchResults && searchResults.length > 0 && (
+            <SearchField
+              value={productSearch.rawValue}
+              onValueChange={productSearch.setRawValue}
+              onClear={productSearch.clear}
+              placeholder="Search by product name..."
+              helperText={productSearch.isReady ? undefined : PICKER_HELPER_TEXT}
+              size="xs"
+              autoFocus
+            />
+            {productSearch.committedValue && !searchResults ? (
+              <div className="mt-1 space-y-px rounded border bg-card p-1">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="h-8 animate-pulse rounded bg-muted/10"
+                  />
+                ))}
+              </div>
+            ) : null}
+            {productSearch.committedValue &&
+              searchResults &&
+              searchResults.length > 0 && (
               <div className="mt-1 max-h-48 overflow-y-auto rounded border bg-card">
                 {searchResults.map((product) => (
                   <button
@@ -298,7 +311,7 @@ function ItemFormFields({
                         product.key,
                         product.cleanName || product.name,
                       )
-                      setSearchText('')
+                      productSearch.clear()
                     }}
                   >
                     <span className="flex-1 truncate">
@@ -311,9 +324,9 @@ function ItemFormFields({
                 ))}
               </div>
             )}
-            {searchResults &&
-              searchResults.length === 0 &&
-              searchText.trim().length >= 2 && (
+            {productSearch.committedValue &&
+              searchResults &&
+              searchResults.length === 0 && (
                 <p className="mt-1 text-[10px] text-muted-foreground">
                   No products found.
                 </p>

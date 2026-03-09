@@ -4,6 +4,10 @@ import { loadSyncCandidates } from './syncCandidates'
 import { getAllowedCatalogCategoryIds } from './config'
 import { getSyncPriority } from './syncState'
 
+function clampLimit(limit: number | undefined, fallback = 25, max = 100) {
+  return Math.max(1, Math.min(limit ?? fallback, max))
+}
+
 async function countDocuments(
   queryHandle: AsyncIterable<unknown>,
 ): Promise<number> {
@@ -32,6 +36,64 @@ function incrementCount(map: Map<string, number>, key: string | undefined) {
   map.set(key, (map.get(key) ?? 0) + 1)
 }
 
+function mapCategorySummary(category: {
+  key: string
+  name: string
+  displayName: string
+  tcgtrackingCategoryId: number
+  productCount: number
+  setCount: number
+  updatedAt: number
+}) {
+  return {
+    key: category.key,
+    label: category.displayName,
+    name: category.name,
+    displayName: category.displayName,
+    tcgtrackingCategoryId: category.tcgtrackingCategoryId,
+    productCount: category.productCount,
+    setCount: category.setCount,
+    updatedAt: category.updatedAt,
+  }
+}
+
+function mapSetSummary(set: {
+  key: string
+  name: string
+  abbreviation?: string
+  categoryKey: string
+  categoryDisplayName: string
+  tcgtrackingSetId: number
+  productCount: number
+  skuCount: number
+  publishedOn?: string
+  syncStatus: string
+  pricingSyncStatus: string
+  pendingSyncMode?: string
+  syncedProductCount: number
+  syncedSkuCount: number
+  updatedAt: number
+}) {
+  return {
+    key: set.key,
+    label: `${set.categoryDisplayName} / ${set.name}`,
+    name: set.name,
+    abbreviation: set.abbreviation,
+    categoryKey: set.categoryKey,
+    categoryDisplayName: set.categoryDisplayName,
+    tcgtrackingSetId: set.tcgtrackingSetId,
+    productCount: set.productCount,
+    skuCount: set.skuCount,
+    publishedOn: set.publishedOn,
+    syncStatus: set.syncStatus,
+    pricingSyncStatus: set.pricingSyncStatus,
+    pendingSyncMode: set.pendingSyncMode,
+    syncedProductCount: set.syncedProductCount,
+    syncedSkuCount: set.syncedSkuCount,
+    updatedAt: set.updatedAt,
+  }
+}
+
 export const getSetByKey = query({
   args: {
     setKey: v.string(),
@@ -51,7 +113,7 @@ export const listCategories = query({
   },
   handler: async (ctx, { search, limit }) => {
     const normalizedSearch = search?.trim()
-    const maxResults = Math.max(1, Math.min(limit ?? 25, 100))
+    const maxResults = clampLimit(limit)
     const categories =
       normalizedSearch && normalizedSearch.length >= 2
         ? await ctx.db
@@ -65,16 +127,7 @@ export const listCategories = query({
             .withIndex('by_displayName')
             .take(maxResults)
 
-    return categories.map((category) => ({
-      key: category.key,
-      label: category.displayName,
-      name: category.name,
-      displayName: category.displayName,
-      tcgtrackingCategoryId: category.tcgtrackingCategoryId,
-      productCount: category.productCount,
-      setCount: category.setCount,
-      updatedAt: category.updatedAt,
-    }))
+    return categories.map(mapCategorySummary)
   },
 })
 
@@ -86,7 +139,7 @@ export const listSets = query({
   },
   handler: async (ctx, { categoryKey, search, limit }) => {
     const normalizedSearch = search?.trim()
-    const maxResults = Math.max(1, Math.min(limit ?? 25, 100))
+    const maxResults = clampLimit(limit)
     const sets =
       normalizedSearch && normalizedSearch.length >= 2
         ? await ctx.db
@@ -108,24 +161,56 @@ export const listSets = query({
               .take(maxResults)
           : await ctx.db.query('catalogSets').withIndex('by_name').take(maxResults)
 
-    return sets.map((set) => ({
-      key: set.key,
-      label: `${set.categoryDisplayName} / ${set.name}`,
-      name: set.name,
-      abbreviation: set.abbreviation,
-      categoryKey: set.categoryKey,
-      categoryDisplayName: set.categoryDisplayName,
-      tcgtrackingSetId: set.tcgtrackingSetId,
-      productCount: set.productCount,
-      skuCount: set.skuCount,
-      publishedOn: set.publishedOn,
-      syncStatus: set.syncStatus,
-      pricingSyncStatus: set.pricingSyncStatus,
-      pendingSyncMode: set.pendingSyncMode,
-      syncedProductCount: set.syncedProductCount,
-      syncedSkuCount: set.syncedSkuCount,
-      updatedAt: set.updatedAt,
-    }))
+    return sets.map(mapSetSummary)
+  },
+})
+
+export const searchCategories = query({
+  args: {
+    search: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { search, limit }) => {
+    const normalizedSearch = search.trim()
+    if (normalizedSearch.length < 2) {
+      return []
+    }
+
+    const categories = await ctx.db
+      .query('catalogCategories')
+      .withSearchIndex('search_displayName', (q) =>
+        q.search('displayName', normalizedSearch),
+      )
+      .take(clampLimit(limit))
+
+    return categories.map(mapCategorySummary)
+  },
+})
+
+export const searchSets = query({
+  args: {
+    categoryKey: v.optional(v.string()),
+    search: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { categoryKey, search, limit }) => {
+    const normalizedSearch = search.trim()
+    if (normalizedSearch.length < 2) {
+      return []
+    }
+
+    const sets = await ctx.db
+      .query('catalogSets')
+      .withSearchIndex('search_name', (q) => {
+        let searchQuery = q.search('name', normalizedSearch)
+        if (categoryKey) {
+          searchQuery = searchQuery.eq('categoryKey', categoryKey)
+        }
+        return searchQuery
+      })
+      .take(clampLimit(limit))
+
+    return sets.map(mapSetSummary)
   },
 })
 
