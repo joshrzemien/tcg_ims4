@@ -20,6 +20,8 @@ import type * as catalog_syncState from "../catalog/syncState.js";
 import type * as cron from "../cron.js";
 import type * as inventory_admin from "../inventory/admin.js";
 import type * as inventory_contents from "../inventory/contents.js";
+import type * as inventory_imports from "../inventory/imports.js";
+import type * as inventory_importsSupport from "../inventory/importsSupport.js";
 import type * as inventory_locations from "../inventory/locations.js";
 import type * as inventory_model from "../inventory/model.js";
 import type * as inventory_shared from "../inventory/shared.js";
@@ -71,6 +73,8 @@ declare const fullApi: ApiFromModules<{
   cron: typeof cron;
   "inventory/admin": typeof inventory_admin;
   "inventory/contents": typeof inventory_contents;
+  "inventory/imports": typeof inventory_imports;
+  "inventory/importsSupport": typeof inventory_importsSupport;
   "inventory/locations": typeof inventory_locations;
   "inventory/model": typeof inventory_model;
   "inventory/shared": typeof inventory_shared;

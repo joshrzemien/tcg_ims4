@@ -14,7 +14,7 @@ import {
   replaceDashboardStats,
   setRuleActiveSeriesCount,
 } from './dashboardReadModel'
-import { categoryRuleAppliesToSet } from './ruleScope'
+import { categoryRuleAppliesToSet, isSetInRuleScope } from './ruleScope'
 import type { Doc, Id } from '../_generated/dataModel'
 
 type TrackingRuleDoc = Doc<'pricingTrackingRules'>
@@ -168,6 +168,113 @@ function joinNeedsPatch(
     existing.setKey !== desired.setKey ||
     !existing.active
   )
+}
+
+export async function ensureSetRuleTrackedForImport(
+  ctx: PricingActionCtx,
+  setKey: string,
+) {
+  const set = await ctx.db
+    .query('catalogSets')
+    .withIndex('by_key', (q: any) => q.eq('key', setKey))
+    .unique()
+
+  if (!set) {
+    throw new Error(`Catalog set not found: ${setKey}`)
+  }
+
+  if (await isSetInRuleScope(ctx, set)) {
+    return {
+      action: 'noop' as const,
+      ruleId: null,
+      scheduled: false,
+      setKey,
+    }
+  }
+
+  const existingSetRules = await ctx.db
+    .query('pricingTrackingRules')
+    .withIndex('by_setKey', (q: any) => q.eq('setKey', setKey))
+    .collect()
+
+  const reusableRule = [...existingSetRules]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .find((rule) => rule.ruleType === 'set')
+
+  if (reusableRule) {
+    if (reusableRule.active) {
+      return {
+        action: 'noop' as const,
+        ruleId: reusableRule._id,
+        scheduled: false,
+        setKey,
+      }
+    }
+
+    const updatedAt = Date.now()
+    await ctx.db.patch('pricingTrackingRules', reusableRule._id, {
+      active: true,
+      updatedAt,
+    })
+    await applyDashboardStatsDelta(
+      ctx,
+      {
+        totalActiveRules: 1,
+      },
+      updatedAt,
+    )
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.pricing.mutations.enqueueRuleAffectedSetSyncs,
+      {
+        ruleId: reusableRule._id,
+      },
+    )
+
+    return {
+      action: 'reactivated' as const,
+      ruleId: reusableRule._id,
+      scheduled: true,
+      setKey,
+    }
+  }
+
+  const now = Date.now()
+  const ruleId = await ctx.db.insert('pricingTrackingRules', {
+    ruleType: 'set',
+    label: buildDefaultRuleLabel({ ruleType: 'set', name: set.name }),
+    active: true,
+    setKey,
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  await refreshRuleDashboardFields(ctx, ruleId)
+  await setRuleActiveSeriesCount(ctx, ruleId, 0, now)
+  await applyDashboardStatsDelta(
+    ctx,
+    {
+      totalRules: 1,
+      totalActiveRules: 1,
+    },
+    now,
+  )
+
+  await ctx.scheduler.runAfter(
+    0,
+    internal.pricing.mutations.enqueueRuleAffectedSetSyncs,
+    {
+      ruleId,
+    },
+  )
+
+  return {
+    action: 'created' as const,
+    ruleId,
+    scheduled: true,
+    setKey,
+  }
 }
 
 export const enqueueRuleAffectedSetSyncs = internalMutation({

@@ -202,6 +202,7 @@ export default defineSchema({
     .index('by_key', ['key'])
     .index('by_categoryKey', ['categoryKey'])
     .index('by_name', ['name'])
+    .index('by_abbreviation', ['abbreviation'])
     .index('by_categoryKey_name', ['categoryKey', 'name'])
     .index('by_inRuleScope_isSynced_lastSyncedAt', [
       'inRuleScope',
