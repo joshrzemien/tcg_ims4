@@ -104,6 +104,7 @@ import type * as pricing_workflows_snapshotCapture from "../pricing/workflows/sn
 import type * as pricing_writers_dashboard from "../pricing/writers/dashboard.js";
 import type * as pricing_writers_issues from "../pricing/writers/issues.js";
 import type * as pricing_writers_rules from "../pricing/writers/rules.js";
+import type * as printing_actions from "../printing/actions.js";
 import type * as printing_mutations from "../printing/mutations.js";
 import type * as printing_queries from "../printing/queries.js";
 import type * as printing_types from "../printing/types.js";
@@ -228,6 +229,7 @@ declare const fullApi: ApiFromModules<{
   "pricing/writers/dashboard": typeof pricing_writers_dashboard;
   "pricing/writers/issues": typeof pricing_writers_issues;
   "pricing/writers/rules": typeof pricing_writers_rules;
+  "printing/actions": typeof printing_actions;
   "printing/mutations": typeof printing_mutations;
   "printing/queries": typeof printing_queries;
   "printing/types": typeof printing_types;

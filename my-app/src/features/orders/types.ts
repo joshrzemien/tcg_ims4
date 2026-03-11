@@ -5,6 +5,7 @@ import type { ShippingMethod } from '../../../shared/shippingMethod'
 import type { ShippingStatus } from '../../../shared/shippingStatus'
 import type {
   PrintJobStatus,
+  PrintJobType,
   PrinterStationStatus,
 } from '../../../shared/printing'
 
@@ -124,7 +125,7 @@ export type PrintDispatchResult = {
 export type PrintJobSummary = {
   _id: Id<'printJobs'>
   stationKey: string
-  jobType: 'shipping_label' | 'packing_slip' | 'pull_sheet'
+  jobType: PrintJobType
   status: PrintJobStatus
   fileName?: string
   mimeType?: string
@@ -150,7 +151,7 @@ export type PrinterStationSummary = {
   status: PrinterStationStatus
   lastHeartbeatAt?: number
   lastSeenAt?: number
-  capabilities: Array<'shipping_label' | 'packing_slip' | 'pull_sheet'>
+  capabilities: Array<PrintJobType>
 }
 
 export type PresetFilter = 'all' | 'last7' | 'last30' | 'unfulfilled'

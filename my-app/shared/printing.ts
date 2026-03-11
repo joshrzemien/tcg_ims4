@@ -12,6 +12,7 @@ export const PRINT_JOB_TYPE_VALUES = [
   'shipping_label',
   'packing_slip',
   'pull_sheet',
+  'ad_hoc_document',
 ] as const
 export const PRINT_JOB_STATUS_VALUES = [
   'queued',

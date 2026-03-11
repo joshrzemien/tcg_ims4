@@ -55,10 +55,16 @@ http.route({
           ? body.capabilities.filter(
               (
                 value,
-              ): value is 'shipping_label' | 'packing_slip' | 'pull_sheet' =>
+              ):
+                value is
+                  | 'shipping_label'
+                  | 'packing_slip'
+                  | 'pull_sheet'
+                  | 'ad_hoc_document' =>
                 value === 'shipping_label' ||
                 value === 'packing_slip' ||
-                value === 'pull_sheet',
+                value === 'pull_sheet' ||
+                value === 'ad_hoc_document',
             )
           : [],
       },

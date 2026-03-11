@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useAction, useMutation, useQuery } from 'convex/react'
+import { Printer } from 'lucide-react'
 import { api } from '../../../convex/_generated/api'
 import { EMPTY_ROWS } from './constants'
 import { ManageLabelsModal } from './components/ManageLabelsModal'
@@ -24,6 +25,8 @@ import type {
   PurchaseQuote,
   PurchaseResult,
 } from './types'
+import { Button } from '~/components/ui/button'
+import { AdHocPdfPrintModal } from '~/features/shared/components/AdHocPdfPrintModal'
 import { humanizeToken as humanize } from '~/features/shared/lib/text'
 import { getErrorMessage } from '~/features/shared/lib/errors'
 import { LoadingTable } from '~/features/shared/components/LoadingState'
@@ -49,6 +52,7 @@ export function OrdersTable() {
   const [purchaseError, setPurchaseError] = useState<string | null>(null)
   const [isPreviewing, setIsPreviewing] = useState(false)
   const [isPurchasing, setIsPurchasing] = useState(false)
+  const [isAdHocPrintModalOpen, setIsAdHocPrintModalOpen] = useState(false)
   const [detailOrder, setDetailOrder] = useState<OrderRow | null>(null)
   const [managedOrder, setManagedOrder] = useState<OrderRow | null>(null)
   const [refundError, setRefundError] = useState<string | null>(null)
@@ -390,6 +394,17 @@ export function OrdersTable() {
     <>
       <StatsBar orders={rows} />
       <PrinterStationStatusCard station={printerStation ?? null} />
+      <div className="mb-4 flex justify-end">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setIsAdHocPrintModalOpen(true)}
+        >
+          <Printer className="size-4" />
+          Print PDF
+        </Button>
+      </div>
       <FlashBanner
         message={flashMessage}
         onDismiss={() => setFlashMessage(null)}
@@ -461,6 +476,13 @@ export function OrdersTable() {
           onClose={closePurchaseModal}
           onSubmit={() => void handlePurchaseSubmit()}
           onChangeAllowUnverifiedAddress={setAllowUnverifiedAddress}
+        />
+      ) : null}
+
+      {isAdHocPrintModalOpen ? (
+        <AdHocPdfPrintModal
+          onClose={() => setIsAdHocPrintModalOpen(false)}
+          onFlash={setFlashMessage}
         />
       ) : null}
 

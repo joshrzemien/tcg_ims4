@@ -124,6 +124,7 @@ const printJobTypeValidator = v.union(
   v.literal('shipping_label'),
   v.literal('packing_slip'),
   v.literal('pull_sheet'),
+  v.literal('ad_hoc_document'),
 )
 
 const printJobStatusValidator = v.union(

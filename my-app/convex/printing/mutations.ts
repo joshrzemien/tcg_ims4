@@ -14,7 +14,12 @@ import {
 import type { Doc, Id } from '../_generated/dataModel'
 
 function defaultCapabilities() {
-  return ['shipping_label', 'packing_slip', 'pull_sheet'] as const
+  return [
+    'shipping_label',
+    'packing_slip',
+    'pull_sheet',
+    'ad_hoc_document',
+  ] as const
 }
 
 async function getStationByKey(ctx: { db: any }, stationKey: string) {

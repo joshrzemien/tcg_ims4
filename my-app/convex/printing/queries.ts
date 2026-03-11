@@ -44,6 +44,7 @@ export const getDefaultStationStatus = query({
         'shipping_label',
         'packing_slip',
         'pull_sheet',
+        'ad_hoc_document',
       ],
     }
   },

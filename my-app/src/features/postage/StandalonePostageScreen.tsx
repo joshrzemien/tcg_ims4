@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useAction, useMutation, useQuery } from 'convex/react'
+import { Printer } from 'lucide-react'
 import { api } from '../../../convex/_generated/api'
 import { defaultFormState } from './constants'
 import { StandalonePurchaseForm } from './components/StandalonePurchaseForm'
@@ -16,6 +17,8 @@ import type {
   PrintJobSummary,
   PrinterStationSummary,
 } from '~/features/orders/types'
+import { Button } from '~/components/ui/button'
+import { AdHocPdfPrintModal } from '~/features/shared/components/AdHocPdfPrintModal'
 import { humanizeToken as humanize } from '~/features/shared/lib/text'
 import { getErrorMessage } from '~/features/shared/lib/errors'
 import { FlashBanner } from '~/features/shared/components/FlashBanner'
@@ -48,6 +51,7 @@ export function StandalonePostageScreen() {
   const [allowUnverifiedAddress, setAllowUnverifiedAddress] = useState(false)
   const [isPreviewing, setIsPreviewing] = useState(false)
   const [isPurchasing, setIsPurchasing] = useState(false)
+  const [isAdHocPrintModalOpen, setIsAdHocPrintModalOpen] = useState(false)
   const [refundingShipmentId, setRefundingShipmentId] = useState<
     StandaloneShipment['_id'] | null
   >(null)
@@ -215,6 +219,17 @@ export function StandalonePostageScreen() {
     <div className="grid gap-4 xl:grid-cols-[minmax(0,430px)_minmax(0,1fr)]">
       <section className="space-y-4">
         <PrinterStationStatusCard station={printerStation ?? null} />
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setIsAdHocPrintModalOpen(true)}
+          >
+            <Printer className="size-4" />
+            Print PDF
+          </Button>
+        </div>
         <FlashBanner
           message={flashMessage}
           onDismiss={() => setFlashMessage(null)}
@@ -233,6 +248,13 @@ export function StandalonePostageScreen() {
           onChangeAllowUnverifiedAddress={setAllowUnverifiedAddress}
         />
       </section>
+
+      {isAdHocPrintModalOpen ? (
+        <AdHocPdfPrintModal
+          onClose={() => setIsAdHocPrintModalOpen(false)}
+          onFlash={setFlashMessage}
+        />
+      ) : null}
 
       <StandaloneShipmentList
         shipments={standaloneShipments}
