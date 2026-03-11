@@ -471,6 +471,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index('by_locationId', ['locationId'])
+    .index('by_locationId_inventoryClass', ['locationId', 'inventoryClass'])
     .index('by_catalogProductKey', ['catalogProductKey'])
     .index('by_catalogSkuKey', ['catalogSkuKey'])
     .index('by_inventoryClass', ['inventoryClass'])

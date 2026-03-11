@@ -34,39 +34,6 @@ describe('inventory csv import modal', () => {
 
     useMutationMock.mockImplementation(() => vi.fn())
     useQueryMock.mockImplementation((queryRef: unknown) => {
-      if (queryRef === api.inventory.stock.getAggregateSummary) {
-        return {
-          itemCount: 0,
-          totalQuantity: 0,
-          totalMarketValueCents: 0,
-          totalLocationCount: 0,
-          byType: {
-            single: {
-              itemCount: 0,
-              totalQuantity: 0,
-              totalMarketValueCents: 0,
-              totalLocationCount: 0,
-            },
-            sealed: {
-              itemCount: 0,
-              totalQuantity: 0,
-              totalMarketValueCents: 0,
-              totalLocationCount: 0,
-            },
-            graded: {
-              itemCount: 0,
-              totalQuantity: 0,
-              totalMarketValueCents: 0,
-              totalLocationCount: 0,
-            },
-          },
-        }
-      }
-
-      if (queryRef === api.inventory.stock.listAggregateByClass) {
-        return []
-      }
-
       if (queryRef === api.inventory.locations.listAssignable) {
         return []
       }

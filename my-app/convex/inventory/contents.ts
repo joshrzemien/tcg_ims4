@@ -557,19 +557,21 @@ export const listByLocation = query({
     inventoryClass: v.optional(inventoryClassValidator),
   },
   handler: async (ctx, args) => {
-    const contents = await ctx.db
-      .query('inventoryLocationContents')
-      .withIndex('by_locationId', (q) => q.eq('locationId', args.locationId))
-      .collect()
-
-    const filtered =
-      args.inventoryClass
-        ? contents.filter((content) => content.inventoryClass === args.inventoryClass)
-        : contents
+    const contents = args.inventoryClass
+      ? await ctx.db
+          .query('inventoryLocationContents')
+          .withIndex('by_locationId_inventoryClass', (q) =>
+            q.eq('locationId', args.locationId).eq('inventoryClass', args.inventoryClass!),
+          )
+          .collect()
+      : await ctx.db
+          .query('inventoryLocationContents')
+          .withIndex('by_locationId', (q) => q.eq('locationId', args.locationId))
+          .collect()
 
     return await hydrateContentRows(
       ctx,
-      filtered.sort((left, right) => right.updatedAt - left.updatedAt),
+      contents.sort((left, right) => right.updatedAt - left.updatedAt),
     )
   },
 })

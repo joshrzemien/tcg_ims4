@@ -42,13 +42,9 @@ export type CsvImportPreview = {
 }
 
 type AggregateRowsResult = NonNullable<
-  ReturnType<typeof useQuery<typeof api.inventory.stock.listAggregateByClass>>
+  ReturnType<typeof useQuery<typeof api.inventory.stock.getAggregateByProduct>>
 >
 export type AggregateRow = AggregateRowsResult[number]
-
-export type AggregateSummary = NonNullable<
-  ReturnType<typeof useQuery<typeof api.inventory.stock.getAggregateSummary>>
->
 
 export type LocationRow = NonNullable<
   ReturnType<typeof useQuery<typeof api.inventory.locations.listAssignable>>

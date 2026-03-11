@@ -6,7 +6,6 @@ import { INVENTORY_CLASSES, VIEW_MODES } from './constants'
 import { AggregateTable } from './components/AggregateTable'
 import { CreateLocationModal } from './components/CreateLocationModal'
 import { ImportCsvModal } from './components/ImportCsvModal'
-import { InventoryStatsBar } from './components/InventoryStatsBar'
 import { LocationContentsTable } from './components/LocationContentsTable'
 import { ProductPicker } from './components/ProductPicker'
 import { ReceiveStockModal } from './components/ReceiveStockModal'
@@ -77,23 +76,30 @@ function LocationView({
 export function InventoryDashboard() {
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null)
   const [activeClass, setActiveClass] = useState<InventoryClass>('single')
-  const [viewMode, setViewMode] = useState<InventoryView>('aggregate')
+  const [viewMode, setViewMode] = useState<InventoryView>('location')
   const [isCreateLocationOpen, setIsCreateLocationOpen] = useState(false)
   const [isImportOpen, setIsImportOpen] = useState(false)
   const [isReceiveOpen, setIsReceiveOpen] = useState(false)
   const [selectedLocationId, setSelectedLocationId] =
     useState<Id<'inventoryLocations'> | null>(null)
+  const [selectedProductKey, setSelectedProductKey] = useState('')
+  const [selectedProductName, setSelectedProductName] = useState('')
 
-  const summary = useQuery(api.inventory.stock.getAggregateSummary, {})
-  const aggregateRows = useQuery(api.inventory.stock.listAggregateByClass, {
-    inventoryClass: activeClass,
-  })
+  const aggregateRows = useQuery(
+    api.inventory.stock.getAggregateByProduct,
+    viewMode === 'aggregate' && selectedProductKey
+      ? {
+          catalogProductKey: selectedProductKey,
+          inventoryClass: activeClass,
+        }
+      : 'skip',
+  )
   const locations = useQuery(api.inventory.locations.listAssignable, {
     activeOnly: true,
   })
   const locationContents = useQuery(
     api.inventory.contents.listByLocation,
-    selectedLocationId
+    viewMode === 'location' && selectedLocationId
       ? {
           locationId: selectedLocationId,
           inventoryClass: activeClass,
@@ -106,6 +112,11 @@ export function InventoryDashboard() {
       setSelectedLocationId(locations[0]._id)
     }
   }, [locations, selectedLocationId])
+
+  useEffect(() => {
+    setSelectedProductKey('')
+    setSelectedProductName('')
+  }, [activeClass])
 
   return (
     <div className="space-y-4">
@@ -157,12 +168,35 @@ export function InventoryDashboard() {
             </Button>
           </div>
         </div>
-
-        <InventoryStatsBar summary={summary ?? undefined} activeClass={activeClass} />
       </div>
 
       {viewMode === 'aggregate' ? (
-        <AggregateTable rows={aggregateRows ?? undefined} inventoryClass={activeClass} />
+        <div className="space-y-3">
+          <div className="rounded border bg-card p-3">
+            <ProductPicker
+              selectedProductKey={selectedProductKey}
+              selectedProductName={selectedProductName}
+              onSelectProduct={(key, name) => {
+                setSelectedProductKey(key)
+                setSelectedProductName(name)
+              }}
+              onClearProduct={() => {
+                setSelectedProductKey('')
+                setSelectedProductName('')
+              }}
+            />
+          </div>
+
+          <AggregateTable
+            rows={aggregateRows ?? undefined}
+            inventoryClass={activeClass}
+            idleMessage={
+              selectedProductKey
+                ? undefined
+                : 'Search for a product to view aggregate stock.'
+            }
+          />
+        </div>
       ) : (
         <LocationView
           selectedLocationId={selectedLocationId}

@@ -14,10 +14,20 @@ import { formatCents, relativeTime } from '~/features/shared/lib/formatting'
 export function AggregateTable({
   rows,
   inventoryClass,
+  idleMessage,
 }: {
   rows: Array<AggregateRow> | undefined
   inventoryClass: InventoryClass
+  idleMessage?: string
 }) {
+  if (idleMessage) {
+    return (
+      <div className="rounded border bg-card px-4 py-8 text-center text-xs text-muted-foreground">
+        {idleMessage}
+      </div>
+    )
+  }
+
   if (!rows) {
     return <LoadingSkeleton />
   }
