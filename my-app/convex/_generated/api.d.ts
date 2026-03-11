@@ -30,7 +30,7 @@ import type * as catalog_writers_products from "../catalog/writers/products.js";
 import type * as catalog_writers_sets from "../catalog/writers/sets.js";
 import type * as catalog_writers_skus from "../catalog/writers/skus.js";
 import type * as catalog_writers_syncState from "../catalog/writers/syncState.js";
-import type * as cron from "../cron.js";
+import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as inventory_admin from "../inventory/admin.js";
 import type * as inventory_contents from "../inventory/contents.js";
@@ -155,7 +155,7 @@ declare const fullApi: ApiFromModules<{
   "catalog/writers/sets": typeof catalog_writers_sets;
   "catalog/writers/skus": typeof catalog_writers_skus;
   "catalog/writers/syncState": typeof catalog_writers_syncState;
-  cron: typeof cron;
+  crons: typeof crons;
   http: typeof http;
   "inventory/admin": typeof inventory_admin;
   "inventory/contents": typeof inventory_contents;

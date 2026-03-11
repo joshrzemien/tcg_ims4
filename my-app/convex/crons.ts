@@ -3,40 +3,36 @@ import { internal } from './_generated/api'
 
 const crons = cronJobs()
 
-crons.interval(
+// Use explicit UTC cron times so jobs with the same cadence do not bunch up
+// based on deploy time.
+crons.cron(
   'catalog:metadata',
-  { hours: 24 },
+  '5 3 * * *',
   internal.catalog.sync.refreshMetadata,
 )
-crons.interval(
+crons.cron(
   'catalog:window',
-  { minutes: 15 },
+  '1,16,31,46 * * * *',
   internal.catalog.sync.syncCatalogWindow,
   { limit: 5 },
-)
-crons.interval(
-  'pricing:tracked_sets',
-  { hours: 6 },
-  internal.pricing.sync.enqueueStaleTrackedSetRefreshes,
-  { limit: 25 },
 )
 // TODO: After the initial backfill, revisit this cadence together with the per-run
 // limit. The current 15m x 5 window keeps load bounded, but it cannot keep up with
 // daily pricing/SKU churn across the full allowed catalog.
-crons.interval(
+crons.cron(
   'orders:active',
-  { minutes: 15 },
+  '8,23,38,53 * * * *',
   internal.orders.sync.syncActive,
 )
-crons.interval('orders:recent', { hours: 1 }, internal.orders.sync.syncRecent)
-crons.interval(
+crons.cron('orders:recent', '28 * * * *', internal.orders.sync.syncRecent)
+crons.cron(
   'orders:archive',
-  { hours: 24 },
+  '35 4 * * *',
   internal.orders.sync.syncArchive,
 )
-crons.interval(
+crons.cron(
   'shipments:status',
-  { hours: 1 },
+  '13 * * * *',
   internal.shipments.sync.refreshActiveStatuses,
   {},
 )
