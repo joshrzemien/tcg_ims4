@@ -13,9 +13,8 @@ import {
   loadTrackedSeriesByProductKey,
   loadUnitDetailsByContentId,
 } from './loaders'
+import type { DbCtx } from '../../lib/ctx'
 import type { InventoryContentDoc } from './loaders'
-
-type DbCtx = { db: any }
 
 export async function hydrateInventoryContentRows(
   ctx: DbCtx,

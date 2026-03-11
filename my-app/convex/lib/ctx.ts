@@ -15,3 +15,11 @@ export type DbWriter = DatabaseWriter
 export type DbCtx = {
   db: DbReader | DbWriter
 }
+
+export type DbReaderCtx = {
+  db: DbReader
+}
+
+export type DbWriterCtx = {
+  db: DbWriter
+}

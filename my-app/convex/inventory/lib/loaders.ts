@@ -1,6 +1,5 @@
 import type { Doc, Id } from '../../_generated/dataModel'
-
-type DbCtx = { db: any }
+import type { DbCtx } from '../../lib/ctx'
 
 export type InventoryContentDoc = Doc<'inventoryLocationContents'>
 export type InventoryLocationDoc = Doc<'inventoryLocations'>

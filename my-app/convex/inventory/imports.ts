@@ -4,6 +4,7 @@ import { parse as parseCsv } from 'csv-parse/sync'
 import { v } from 'convex/values'
 import { internal } from '../_generated/api'
 import { action } from '../_generated/server'
+import { chunkArray, dedupeByKey } from '../lib/collections'
 import {
   CSV_IMPORT_PREVIEW_SAMPLE_LIMIT,
   CSV_IMPORT_REQUIRED_HEADERS,
@@ -98,20 +99,6 @@ export function parseCsvImportRows(text: string) {
       condition: normalizeCell(row.Condition),
       language: normalizeCell(row.Language),
     }))
-}
-
-function chunkArray<T>(items: Array<T>, size: number) {
-  const chunks: Array<Array<T>> = []
-
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size))
-  }
-
-  return chunks
-}
-
-function dedupeByKey<T>(items: Array<T>, getKey: (item: T) => string) {
-  return [...new Map(items.map((item) => [getKey(item), item])).values()]
 }
 
 async function loadCsvImportPlan(
