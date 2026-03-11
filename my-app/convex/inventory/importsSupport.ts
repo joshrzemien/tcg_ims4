@@ -3,7 +3,7 @@ import {
   internalMutation,
   internalQuery,
 } from '../_generated/server'
-import { ensureSetRuleTrackedForImport } from '../pricing/mutations'
+import { ensureSetRuleTrackedForImport } from '../pricing/workflows/ensureTrackedSet'
 import { receiveCatalogContentIntoLocation } from './contents'
 import {
   ensurePhysicalLocationByCode,

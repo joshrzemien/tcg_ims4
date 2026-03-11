@@ -1,4 +1,4 @@
-import { getTrackedPrintingDefinitions } from '../pricing/normalizers'
+import { getTrackedPrintingDefinitions } from '../lib/printing'
 import type { Doc, Id } from '../_generated/dataModel'
 
 type CatalogProductDoc = Doc<'catalogProducts'>
