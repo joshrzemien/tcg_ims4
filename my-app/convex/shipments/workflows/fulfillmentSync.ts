@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { api } from '../../_generated/api'
 import { action } from '../../_generated/server'
 import { updateManapoolOrderFulfillment } from '../../orders/sources/manapool'
+import { markTcgplayerOrderShipped } from '../../orders/sources/tcgplayer'
 import {
   
   
@@ -16,7 +17,27 @@ export async function syncMarketplaceFulfillmentForOrder(
   shipments: Array<ShipmentDoc>,
   fulfilled: boolean,
 ): Promise<string | undefined> {
-  if (!fulfilled || order.channel !== 'manapool') {
+  if (!fulfilled) {
+    return undefined
+  }
+
+  if (order.channel === 'tcgplayer') {
+    if (order.shippingMethod === 'Parcel') {
+      return `Warning: ${order.orderNumber} marked fulfilled locally, but TCGPlayer fulfillment sync was skipped because the order requires tracked shipping.`
+    }
+
+    try {
+      await markTcgplayerOrderShipped({
+        orderNumber: order.externalId,
+      })
+    } catch (error) {
+      return `Warning: ${order.orderNumber} marked fulfilled locally, but TCGPlayer fulfillment sync failed: ${formatGenericError(error)}`
+    }
+
+    return undefined
+  }
+
+  if (order.channel !== 'manapool') {
     return undefined
   }
 

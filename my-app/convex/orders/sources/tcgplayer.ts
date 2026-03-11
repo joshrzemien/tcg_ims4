@@ -229,6 +229,27 @@ async function exportPackingSlipsDocument(
   return readExportDocumentResponse(res, "packing slips");
 }
 
+async function shipOrderWithoutTracking(
+  sessionCookie: string,
+  orderNumber: string
+): Promise<void> {
+  const res = await fetch(
+    buildUrl(`/orders/${encodeURIComponent(orderNumber)}/ship-no-tracking`),
+    {
+      method: "POST",
+      headers: buildHeaders(sessionCookie, false),
+      body: "",
+    }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(
+      `TCGPlayer ship-no-tracking failed for ${orderNumber}: ${res.status} ${text}`
+    );
+  }
+}
+
 // -- Public --
 
 export async function fetchTcgplayerOrders(
@@ -306,4 +327,12 @@ export async function exportTcgplayerPackingSlips(args: {
     timezoneOffset: args.timezoneOffset,
     orderNumbers: args.orderNumbers,
   });
+}
+
+export async function markTcgplayerOrderShipped(args: {
+  orderNumber: string;
+}): Promise<void> {
+  const sessionCookie = process.env.TCGPLAYER_SESSION_COOKIE!;
+
+  await shipOrderWithoutTracking(sessionCookie, args.orderNumber);
 }
