@@ -105,6 +105,10 @@ type OrdersPage = {
 }
 
 type ManagedShipment = Doc<'shipments'>
+type OrderPickContext = NonNullable<
+  ReturnType<typeof useQuery<typeof api.orders.queries.getPickContext>>
+>
+type OrderPickItem = OrderPickContext['items'][number]
 
 type PurchaseQuote = {
   shippingMethod: ShippingMethod
@@ -404,6 +408,33 @@ function formatRefundStatus(refundStatus?: string) {
   return humanize(normalizeStatusToken(refundStatus))
 }
 
+function formatOrderItemMeta(item: Pick<
+  OrderPickItem,
+  'set' | 'collectorNumber' | 'conditionId' | 'finishId' | 'languageId'
+>) {
+  return [
+    item.set,
+    item.collectorNumber ? `#${item.collectorNumber}` : undefined,
+    item.conditionId,
+    item.finishId,
+    item.languageId,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .join(' · ')
+}
+
+function inventoryStatusTone(orderedQuantity: number, availableQuantity: number) {
+  if (availableQuantity >= orderedQuantity) {
+    return 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
+  }
+
+  if (availableQuantity > 0) {
+    return 'border-amber-500/20 bg-amber-500/5 text-amber-400'
+  }
+
+  return 'border-red-500/20 bg-red-500/5 text-red-400'
+}
+
 function LoadingTable() {
   return (
     <div className="space-y-3">
@@ -429,15 +460,17 @@ function Modal({
   description,
   onClose,
   children,
+  widthClass = 'max-w-2xl',
 }: {
   title: string
   description: string
   onClose: () => void
   children: ReactNode
+  widthClass?: string
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="w-full max-w-2xl rounded-lg border bg-card shadow-2xl">
+      <div className={cn('w-full rounded-lg border bg-card shadow-2xl', widthClass)}>
         <header className="flex items-start justify-between gap-3 border-b px-4 py-3">
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-foreground">{title}</h3>
@@ -577,6 +610,7 @@ export function OrdersTable() {
   const [purchaseError, setPurchaseError] = useState<string | null>(null)
   const [isPreviewing, setIsPreviewing] = useState(false)
   const [isPurchasing, setIsPurchasing] = useState(false)
+  const [detailOrder, setDetailOrder] = useState<OrderRow | null>(null)
   const [managedOrder, setManagedOrder] = useState<OrderRow | null>(null)
   const [refundError, setRefundError] = useState<string | null>(null)
   const [refundingShipmentId, setRefundingShipmentId] = useState<
@@ -589,6 +623,13 @@ export function OrdersTable() {
   const currentManagedOrder = managedOrder
     ? rows.find((order) => order._id === managedOrder._id) ?? managedOrder
     : null
+  const currentDetailOrder = detailOrder
+    ? rows.find((order) => order._id === detailOrder._id) ?? detailOrder
+    : null
+  const orderPickContext = useQuery(
+    api.orders.queries.getPickContext,
+    currentDetailOrder ? { orderId: currentDetailOrder._id } : 'skip',
+  )
   const managedOrderShipments = useQuery(
     api.shipments.queries.getByOrderId,
     currentManagedOrder ? { orderId: currentManagedOrder._id } : 'skip',
@@ -661,10 +702,19 @@ export function OrdersTable() {
     setRefundError(null)
   }, [])
 
+  const openDetailModal = useCallback((order: OrderRow) => {
+    setFlashMessage(null)
+    setDetailOrder(order)
+  }, [])
+
   function closeManageModal() {
     setManagedOrder(null)
     setRefundError(null)
     setRefundingShipmentId(null)
+  }
+
+  function closeDetailModal() {
+    setDetailOrder(null)
   }
 
   async function handlePurchaseSubmit() {
@@ -991,6 +1041,19 @@ export function OrdersTable() {
                     type="button"
                     size="icon-xs"
                     variant="ghost"
+                    onClick={() => openDetailModal(order)}
+                  >
+                    <Package className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="left">View Order / Pull</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
                     onClick={() => openManageModal(order)}
                   >
                     <Truck className="size-3" />
@@ -1014,6 +1077,19 @@ export function OrdersTable() {
                   type="button"
                   size="icon-xs"
                   variant="ghost"
+                  onClick={() => openDetailModal(order)}
+                >
+                  <Package className="size-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="left">View Order / Pull</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
                   onClick={() => void openPurchaseModal(order)}
                 >
                   <Tag className="size-3" />
@@ -1025,7 +1101,7 @@ export function OrdersTable() {
         )
       },
     }),
-  ], [openManageModal, openPurchaseModal])
+  ], [openDetailModal, openManageModal, openPurchaseModal])
 
   const table = useReactTable({
     data: rows,
@@ -1043,17 +1119,6 @@ export function OrdersTable() {
 
   if (!ordersPage) {
     return <LoadingTable />
-  }
-
-  if (rows.length === 0 && pageIndex === 0) {
-    return (
-      <div className="rounded border border-dashed bg-card px-6 py-12 text-center">
-        <p className="text-xs font-medium text-foreground">No orders found</p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Orders will appear here as soon as they are synced.
-        </p>
-      </div>
-    )
   }
 
   const canRepurchaseManaged = canRepurchaseShipment(
@@ -1256,43 +1321,59 @@ export function OrdersTable() {
             </TableHeader>
 
             <TableBody>
-              {table.getRowModel().rows.map((row, rowIndex) => (
-                <TableRow
-                  key={row.id}
-                  data-state={row.getIsSelected() ? 'selected' : undefined}
-                  aria-selected={row.getIsSelected()}
-                  className={cn(
-                    'border-border/30 cursor-pointer',
-                    rowIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
-                    row.getIsSelected()
-                      ? 'bg-primary/6 outline outline-1 -outline-offset-1 outline-primary/25 hover:bg-primary/10'
-                      : 'hover:bg-muted/20',
-                  )}
-                  onClick={(event) => {
-                    if (shouldIgnoreRowSelection(event.target)) {
-                      return
-                    }
-
-                    row.toggleSelected()
-                  }}
-                >
-                  {row.getVisibleCells().map((cell) => {
-                    const isNumeric = numericColumns.has(cell.column.id)
-                    return (
-                      <TableCell
-                        key={cell.id}
-                        className={cn(
-                          'px-2 py-1.5',
-                          getColumnWidthClass(cell.column.id),
-                          isNumeric && 'text-right tabular-nums',
-                        )}
-                      >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    )
-                  })}
+              {table.getRowModel().rows.length === 0 ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell
+                    colSpan={table.getAllColumns().length}
+                    className="px-6 py-12 text-center"
+                  >
+                    <p className="text-xs font-medium text-foreground">No orders found</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {activeFilter === 'unfulfilled'
+                        ? 'No unfulfilled orders match the current filter.'
+                        : 'Orders will appear here as soon as they are synced.'}
+                    </p>
+                  </TableCell>
                 </TableRow>
-              ))}
+              ) : (
+                table.getRowModel().rows.map((row, rowIndex) => (
+                  <TableRow
+                    key={row.id}
+                    data-state={row.getIsSelected() ? 'selected' : undefined}
+                    aria-selected={row.getIsSelected()}
+                    className={cn(
+                      'border-border/30 cursor-pointer',
+                      rowIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
+                      row.getIsSelected()
+                        ? 'bg-primary/6 outline outline-1 -outline-offset-1 outline-primary/25 hover:bg-primary/10'
+                        : 'hover:bg-muted/20',
+                    )}
+                    onClick={(event) => {
+                      if (shouldIgnoreRowSelection(event.target)) {
+                        return
+                      }
+
+                      row.toggleSelected()
+                    }}
+                  >
+                    {row.getVisibleCells().map((cell) => {
+                      const isNumeric = numericColumns.has(cell.column.id)
+                      return (
+                        <TableCell
+                          key={cell.id}
+                          className={cn(
+                            'px-2 py-1.5',
+                            getColumnWidthClass(cell.column.id),
+                            isNumeric && 'text-right tabular-nums',
+                          )}
+                        >
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      )
+                    })}
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </div>
@@ -1510,6 +1591,187 @@ export function OrdersTable() {
                 {isPurchasing ? 'Purchasing...' : 'Buy Label'}
               </Button>
             </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {/* Order Detail Modal */}
+      {currentDetailOrder ? (
+        <Modal
+          title={`Order: ${currentDetailOrder.orderNumber}`}
+          description="Review order contents and pull locations for each linked SKU."
+          onClose={closeDetailModal}
+          widthClass="max-w-5xl"
+        >
+          <div className="space-y-3">
+            <div className="grid gap-2 rounded border bg-muted/5 p-3 md:grid-cols-5">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Customer
+                </p>
+                <p className="mt-0.5 text-xs font-medium text-foreground">
+                  {currentDetailOrder.customerName}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Channel
+                </p>
+                <p className="mt-0.5 text-xs font-medium text-foreground">
+                  {humanize(currentDetailOrder.channel)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Items
+                </p>
+                <p className="mt-0.5 text-xs font-medium text-foreground">
+                  {currentDetailOrder.itemCount}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Total
+                </p>
+                <p className="mt-0.5 text-xs font-medium text-foreground">
+                  {currencyFormatter.format(currentDetailOrder.totalAmountCents / 100)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Fulfillment
+                </p>
+                <p className="mt-0.5 text-xs font-medium text-foreground">
+                  {currentDetailOrder.isFulfilled ? 'Fulfilled' : 'Unfulfilled'}
+                </p>
+              </div>
+            </div>
+
+            {orderPickContext === undefined ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <div key={index} className="h-28 animate-pulse rounded border bg-muted/20" />
+                ))}
+              </div>
+            ) : orderPickContext === null ? (
+              <div className="rounded border border-dashed bg-muted/10 px-4 py-8 text-center text-sm text-muted-foreground">
+                Order not found.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {orderPickContext.items.map((item) => {
+                  const exactSkuLinked =
+                    typeof item.catalogSkuKey === 'string' && item.catalogSkuKey.length > 0
+                  const meta = formatOrderItemMeta(item)
+
+                  return (
+                    <div key={`${item.itemIndex}-${item.name}`} className="rounded border bg-muted/5 p-3">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0 space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-foreground">
+                              {item.name}
+                            </p>
+                            <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                              Qty {item.quantity}
+                            </span>
+                            <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                              {humanize(item.productType)}
+                            </span>
+                          </div>
+                          {meta ? (
+                            <p className="text-xs text-muted-foreground">{meta}</p>
+                          ) : null}
+                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                            <span>
+                              SKU link:{' '}
+                              <span className="font-mono text-foreground">
+                                {item.catalogSkuKey ?? 'unlinked'}
+                              </span>
+                            </span>
+                            {typeof item.tcgplayerSku === 'number' ? (
+                              <span>
+                                TCGplayer SKU:{' '}
+                                <span className="font-mono text-foreground">{item.tcgplayerSku}</span>
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        <div
+                          className={cn(
+                            'rounded border px-3 py-2 text-xs',
+                            inventoryStatusTone(item.quantity, item.inventory.availableQuantity),
+                          )}
+                        >
+                          <p className="font-semibold">
+                            Available {item.inventory.availableQuantity} / Ordered {item.quantity}
+                          </p>
+                          <p className="mt-0.5 text-[11px]">
+                            Total across all workflow states: {item.inventory.totalQuantity}
+                          </p>
+                        </div>
+                      </div>
+
+                      {!exactSkuLinked ? (
+                        <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-400">
+                          This order item is not linked to a catalog SKU yet, so exact pull locations cannot be resolved.
+                        </div>
+                      ) : item.inventory.rows.length === 0 ? (
+                        <div className="mt-3 rounded border border-dashed bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
+                          No inventory rows found for this SKU.
+                        </div>
+                      ) : (
+                        <div className="mt-3 space-y-2">
+                          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                            Pull Locations
+                          </p>
+                          {item.inventory.rows.map((row) => (
+                            <div
+                              key={row.contentId}
+                              className="grid gap-2 rounded border bg-background/70 px-3 py-2 text-xs md:grid-cols-[minmax(0,1.5fr)_auto_auto]"
+                            >
+                              <div className="min-w-0">
+                                <p className="font-mono font-medium text-foreground">
+                                  {row.location.code}
+                                </p>
+                                <p className="truncate text-muted-foreground">
+                                  {row.location.displayName ?? row.location.kind}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={cn(
+                                    'inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+                                    row.workflowStatus === 'available'
+                                      ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
+                                      : row.workflowStatus === 'processing'
+                                        ? 'border-blue-500/20 bg-blue-500/5 text-blue-400'
+                                        : 'border-amber-500/20 bg-amber-500/5 text-amber-400',
+                                  )}
+                                >
+                                  {humanize(row.workflowStatus)}
+                                </span>
+                                {row.workflowTag ? (
+                                  <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                    {row.workflowTag}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="flex items-center justify-start md:justify-end">
+                                <span className="font-semibold tabular-nums text-foreground">
+                                  Qty {row.quantity}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </Modal>
       ) : null}
