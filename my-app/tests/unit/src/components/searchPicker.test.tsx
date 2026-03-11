@@ -3,8 +3,8 @@
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ProductPicker } from '../../../../src/components/InventoryDashboard'
-import { CreateRuleModal } from '../../../../src/components/PricingDashboard'
+import { ProductPicker } from '../../../../src/features/inventory/InventoryDashboard'
+import { CreateRuleModal } from '../../../../src/features/pricing/PricingDashboard'
 
 const {
   useQueryMock,

@@ -15,6 +15,7 @@ import {
   buildInventoryAggregateRow,
   buildInventoryContentRow,
   buildInventoryExtendedPriceCents,
+  buildInventoryPriceSummary,
   buildPendingGradedContentIdentityKey,
   buildTcgplayerProductUrl,
   buildUnitIdentityKey,
@@ -22,7 +23,6 @@ import {
   normalizeLocationCode,
   parseLocationCode,
   resolveInventoryPriceCents,
-  buildInventoryPriceSummary,
 } from '../../../../convex/inventory/model'
 
 describe('normalizeLocationCode', () => {

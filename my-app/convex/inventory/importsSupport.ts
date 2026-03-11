@@ -3,14 +3,14 @@ import {
   internalMutation,
   internalQuery,
 } from '../_generated/server'
-import type { Doc, Id } from '../_generated/dataModel'
+import { ensureSetRuleTrackedForImport } from '../pricing/mutations'
 import { receiveCatalogContentIntoLocation } from './contents'
 import {
   ensurePhysicalLocationByCode,
   loadLocationByCode,
   loadLocationById,
 } from './shared'
-import { ensureSetRuleTrackedForImport } from '../pricing/mutations'
+import type { Doc, Id } from '../_generated/dataModel'
 
 export const CSV_IMPORT_WRITE_BATCH_SIZE = 150
 export const CSV_IMPORT_PREVIEW_SAMPLE_LIMIT = 25
@@ -506,12 +506,14 @@ export const loadCatalogSkusForImport = internalQuery({
       )
 
       results.push(
-        ...skus.filter((sku) => sku !== null).map((sku) => ({
-          key: sku!.key,
-          setKey: sku!.setKey,
-          catalogProductKey: sku!.catalogProductKey,
-          tcgplayerSku: sku!.tcgplayerSku,
-        })),
+        ...skus
+          .filter((sku): sku is NonNullable<(typeof skus)[number]> => sku !== null)
+          .map((sku) => ({
+            key: sku.key,
+            setKey: sku.setKey,
+            catalogProductKey: sku.catalogProductKey,
+            tcgplayerSku: sku.tcgplayerSku,
+          })),
       )
     }
 
@@ -612,13 +614,15 @@ export const listLocationsByCodes = internalQuery({
         .map(async (code) => await loadLocationByCode(ctx, code)),
     )
 
-    return locations.filter((location) => location !== null).map((location) => ({
-      _id: location!._id,
-      code: location!.code,
-      active: location!.active,
-      acceptsContents: location!.acceptsContents,
-      displayName: location!.displayName,
-    }))
+    return locations
+      .filter((location): location is NonNullable<(typeof locations)[number]> => location !== null)
+      .map((location) => ({
+        _id: location._id,
+        code: location.code,
+        active: location.active,
+        acceptsContents: location.acceptsContents,
+        displayName: location.displayName,
+      }))
   },
 })
 
@@ -656,7 +660,7 @@ export const prepareCsvImportCommit = internalMutation({
       }
 
       const created = await ensurePhysicalLocationByCode(ctx, code, true)
-      await ctx.db.patch(created._id, {
+      await ctx.db.patch('inventoryLocations', created._id, {
         displayName: locationToCreate.displayName,
         notes: 'Auto-created from singles CSV import',
         updatedAt: Date.now(),

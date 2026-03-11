@@ -17,22 +17,20 @@ import {
   Tag,
   Truck,
   Undo2,
-  X,
 } from 'lucide-react'
-import { api } from '../../convex/_generated/api'
-import { formatShippingMethodLabel } from '../../shared/shippingMethod'
+import { api } from '../../../convex/_generated/api'
+import { isNonRefundableEasyPostLetterShipment } from '../../../shared/shippingRefund'
+import { formatShippingMethodLabel } from '../../../shared/shippingMethod'
 import {
   formatShippingStatusLabel,
   hasRefundedPostage,
   normalizeShippingStatus,
   normalizeStatusToken,
-} from '../../shared/shippingStatus'
-import { isNonRefundableEasyPostLetterShipment } from '../../shared/shippingRefund'
+} from '../../../shared/shippingStatus'
 import type { RowSelectionState } from '@tanstack/react-table'
-import type { ReactNode } from 'react'
-import type { Doc } from '../../convex/_generated/dataModel'
-import type { ShippingMethod } from '../../shared/shippingMethod'
-import type { ShippingStatus } from '../../shared/shippingStatus'
+import type { ShippingMethod } from '../../../shared/shippingMethod'
+import type { ShippingStatus } from '../../../shared/shippingStatus'
+import type { Doc } from '../../../convex/_generated/dataModel'
 import { Button } from '~/components/ui/button'
 import {
   Table,
@@ -47,6 +45,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '~/components/ui/tooltip'
+import { DialogShell } from '~/features/shared/components/DialogShell'
+import { LoadingTable } from '~/features/shared/components/LoadingState'
+import { getErrorMessage } from '~/features/shared/lib/errors'
+import { formatCents, formatDate } from '~/features/shared/lib/formatting'
+import { humanizeToken as humanize } from '~/features/shared/lib/text'
 import { cn } from '~/lib/utils'
 
 type OrderRow = {
@@ -162,17 +165,6 @@ type FlashMessage =
 const columnHelper = createColumnHelper<OrderRow>()
 const EMPTY_ROWS: Array<OrderRow> = []
 
-const currencyFormatter = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-})
-
-const dateFormatter = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: '2-digit',
-})
-
 // Muted, subtle status styles for the dense dashboard aesthetic
 const statusStyles: Record<ShippingStatus, string> = {
   pending:
@@ -237,10 +229,6 @@ const columnWidths: Partial<Record<string, string>> = {
   actions: 'w-[5.5rem] min-w-[5.5rem]',
 }
 
-function humanize(value: string) {
-  return value.replaceAll('_', ' ')
-}
-
 function getColumnWidthClass(columnId: string) {
   return columnWidths[columnId] ?? ''
 }
@@ -272,10 +260,6 @@ function shouldIgnoreRowSelection(target: EventTarget | null) {
   return target instanceof Element
     ? target.closest(rowSelectionIgnoreSelector) !== null
     : false
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown error'
 }
 
 function normalizeBase64DocumentData(base64Data: string): {
@@ -400,7 +384,7 @@ function formatRateLabel(rate: PurchaseQuote['rate']) {
       ? `, ${rate.deliveryDays}d`
       : ''
 
-  return `${rate.carrier} ${rate.service} · ${currencyFormatter.format(rate.rateCents / 100)}${deliveryDays}`
+  return `${rate.carrier} ${rate.service} · ${formatCents(rate.rateCents)}${deliveryDays}`
 }
 
 function formatRefundStatus(refundStatus?: string) {
@@ -435,62 +419,6 @@ function inventoryStatusTone(orderedQuantity: number, availableQuantity: number)
   return 'border-red-500/20 bg-red-500/5 text-red-400'
 }
 
-function LoadingTable() {
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-4 gap-2">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-14 animate-pulse rounded border bg-muted/20" />
-        ))}
-      </div>
-      <div className="rounded border bg-card">
-        <div className="h-8 border-b bg-muted/10" />
-        <div className="space-y-px">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="h-8 animate-pulse bg-muted/5" />
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Modal({
-  title,
-  description,
-  onClose,
-  children,
-  widthClass = 'max-w-2xl',
-}: {
-  title: string
-  description: string
-  onClose: () => void
-  children: ReactNode
-  widthClass?: string
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className={cn('w-full rounded-lg border bg-card shadow-2xl', widthClass)}>
-        <header className="flex items-start justify-between gap-3 border-b px-4 py-3">
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
-          </div>
-          <button
-            type="button"
-            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            onClick={onClose}
-            aria-label="Close dialog"
-          >
-            <X className="size-3.5" />
-          </button>
-        </header>
-        <div className="max-h-[80vh] overflow-y-auto px-4 py-3">{children}</div>
-      </div>
-    </div>
-  )
-}
-
 // -- Stats Bar --
 function StatsBar({ orders }: { orders: Array<OrderRow> }) {
   // TODO: These dashboard metrics are computed from the current page only.
@@ -515,7 +443,7 @@ function StatsBar({ orders }: { orders: Array<OrderRow> }) {
     },
     {
       label: 'Revenue',
-      value: currencyFormatter.format(stats.totalRevenue / 100),
+      value: formatCents(stats.totalRevenue),
       icon: DollarSign,
     },
     {
@@ -535,7 +463,7 @@ function StatsBar({ orders }: { orders: Array<OrderRow> }) {
     },
     {
       label: 'Avg Order',
-      value: currencyFormatter.format(stats.avgOrderValue / 100),
+      value: formatCents(stats.avgOrderValue),
       icon: DollarSign,
     },
   ]
@@ -1012,7 +940,7 @@ export function OrdersTable() {
       header: 'Total',
       cell: (info) => (
         <span className="text-xs font-medium tabular-nums">
-          {currencyFormatter.format(info.getValue() / 100)}
+          {formatCents(info.getValue())}
         </span>
       ),
     }),
@@ -1023,7 +951,7 @@ export function OrdersTable() {
           className="text-xs tabular-nums text-muted-foreground"
           title={new Date(info.getValue()).toLocaleString()}
         >
-          {dateFormatter.format(new Date(info.getValue()))}
+          {formatDate(info.getValue())}
         </span>
       ),
     }),
@@ -1451,7 +1379,7 @@ export function OrdersTable() {
 
       {/* Purchase Modal */}
       {purchaseOrder ? (
-        <Modal
+        <DialogShell
           title={`Purchase Shipping: ${purchaseOrder.orderNumber}`}
           description="Rates are quoted live from EasyPost. Purchase is blocked if the quoted service or price changes before buy."
           onClose={closePurchaseModal}
@@ -1592,12 +1520,12 @@ export function OrdersTable() {
               </Button>
             </div>
           </div>
-        </Modal>
+        </DialogShell>
       ) : null}
 
       {/* Order Detail Modal */}
       {currentDetailOrder ? (
-        <Modal
+        <DialogShell
           title={`Order: ${currentDetailOrder.orderNumber}`}
           description="Review order contents and pull locations for each linked SKU."
           onClose={closeDetailModal}
@@ -1634,7 +1562,7 @@ export function OrdersTable() {
                   Total
                 </p>
                 <p className="mt-0.5 text-xs font-medium text-foreground">
-                  {currencyFormatter.format(currentDetailOrder.totalAmountCents / 100)}
+                  {formatCents(currentDetailOrder.totalAmountCents)}
                 </p>
               </div>
               <div>
@@ -1773,12 +1701,12 @@ export function OrdersTable() {
               </div>
             )}
           </div>
-        </Modal>
+        </DialogShell>
       ) : null}
 
       {/* Manage Label Modal */}
       {currentManagedOrder ? (
-        <Modal
+        <DialogShell
           title={`Manage Labels: ${currentManagedOrder.orderNumber}`}
           description="Review the full shipment history for this order, refund unused labels, or start a replacement purchase after the active label is refunded."
           onClose={closeManageModal}
@@ -1872,7 +1800,7 @@ export function OrdersTable() {
                               Purchased
                             </p>
                             <p className="mt-0.5 text-foreground">
-                              {dateFormatter.format(new Date(shipment.createdAt))}
+                              {formatDate(shipment.createdAt)}
                             </p>
                           </div>
                           <div>
@@ -1967,7 +1895,7 @@ export function OrdersTable() {
               </p>
             ) : null}
           </div>
-        </Modal>
+        </DialogShell>
       ) : null}
     </>
   )

@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '../components/AppShell'
-import { StandalonePostageScreen } from '../components/StandalonePostageScreen'
+import { StandalonePostageScreen } from '../features/postage/StandalonePostageScreen'
 
 export const Route = createFileRoute('/postage')({
   component: PostagePage,

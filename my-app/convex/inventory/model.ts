@@ -104,11 +104,7 @@ export function normalizeInventoryClass(
 export function normalizeWorkflowStatus(
   workflowStatus: string | undefined,
 ): InventoryWorkflowStatus {
-  if (
-    workflowStatus === undefined ||
-    workflowStatus === null ||
-    workflowStatus === ''
-  ) {
+  if (workflowStatus === undefined || workflowStatus === '') {
     return 'available'
   }
 

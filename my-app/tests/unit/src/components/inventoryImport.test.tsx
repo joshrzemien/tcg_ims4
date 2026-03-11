@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getFunctionName } from 'convex/server'
 import { api } from '../../../../convex/_generated/api'
-import { InventoryDashboard } from '../../../../src/components/InventoryDashboard'
+import { InventoryDashboard } from '../../../../src/features/inventory/InventoryDashboard'
 
 const {
   useActionMock,
@@ -152,7 +152,7 @@ describe('inventory csv import modal', () => {
 
     fetchMock.mockResolvedValue({
       ok: true,
-      json: async () => ({ storageId: 'storage-1' }),
+      json: () => Promise.resolve({ storageId: 'storage-1' }),
     })
 
     render(<InventoryDashboard />)

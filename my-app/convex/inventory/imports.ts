@@ -1,23 +1,23 @@
-"use node";
+'use node'
 
 import { parse as parseCsv } from 'csv-parse/sync'
 import { v } from 'convex/values'
 import { internal } from '../_generated/api'
 import { action } from '../_generated/server'
+import {
+  CSV_IMPORT_PREVIEW_SAMPLE_LIMIT,
+  CSV_IMPORT_REQUIRED_HEADERS,
+  CSV_IMPORT_WRITE_BATCH_SIZE,
+  buildCsvImportPlan,
+  resolveImportSetForRow,
+  sanitizeImportLocationCode,
+  summarizeSkippedRows,
+} from './importsSupport'
 import type { Id } from '../_generated/dataModel'
 import type {
   CsvImportAggregatedRow,
   CsvImportPlan,
   ImportSetSummary,
-} from './importsSupport'
-import {
-  buildCsvImportPlan,
-  CSV_IMPORT_PREVIEW_SAMPLE_LIMIT,
-  CSV_IMPORT_REQUIRED_HEADERS,
-  CSV_IMPORT_WRITE_BATCH_SIZE,
-  resolveImportSetForRow,
-  sanitizeImportLocationCode,
-  summarizeSkippedRows,
 } from './importsSupport'
 
 function normalizeHeader(value: string | undefined) {
@@ -224,7 +224,7 @@ async function loadCsvImportPlan(
     products: dedupeByKey(
       (
         await Promise.all([
-          ...chunkArray(catalogProductKeys, 2000).map(async (catalogProductKeys) => {
+          ...chunkArray(catalogProductKeys, 2000).map(async (productKeysChunk) => {
             const result: {
               products: Array<{
                 key: string
@@ -236,14 +236,14 @@ async function loadCsvImportPlan(
             } = await ctx.runQuery(
               internal.inventory.importsSupport.loadCatalogProductsForImport,
               {
-                catalogProductKeys,
+                catalogProductKeys: productKeysChunk,
                 tcgplayerProductIds: [],
               },
             )
 
             return result.products
           }),
-          ...chunkArray(tcgplayerProductIds, 2000).map(async (tcgplayerProductIds) => {
+          ...chunkArray(tcgplayerProductIds, 2000).map(async (productIdsChunk) => {
             const result: {
               products: Array<{
                 key: string
@@ -256,7 +256,7 @@ async function loadCsvImportPlan(
               internal.inventory.importsSupport.loadCatalogProductsForImport,
               {
                 catalogProductKeys: [],
-                tcgplayerProductIds,
+                tcgplayerProductIds: productIdsChunk,
               },
             )
 

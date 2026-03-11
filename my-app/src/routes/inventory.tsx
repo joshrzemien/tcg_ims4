@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '../components/AppShell'
-import { InventoryDashboard } from '../components/InventoryDashboard'
+import { InventoryDashboard } from '../features/inventory/InventoryDashboard'
 
 export const Route = createFileRoute('/inventory')({
   component: InventoryPage,

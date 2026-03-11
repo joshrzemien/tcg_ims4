@@ -1,5 +1,4 @@
 import { v } from 'convex/values'
-import type { Doc, Id } from '../_generated/dataModel'
 import {
   buildCatalogContentIdentityKey,
   buildEmptyWorkflowBreakdown,
@@ -11,6 +10,7 @@ import {
   parseLocationCode,
   validateInventoryContent,
 } from './model'
+import type { Doc, Id } from '../_generated/dataModel'
 
 export const inventoryClassValidator = v.union(
   v.literal('single'),
@@ -75,7 +75,7 @@ export async function loadLocationById(
   ctx: DbCtx,
   locationId: Id<'inventoryLocations'>,
 ) {
-  const location = await ctx.db.get(locationId)
+  const location = await ctx.db.get('inventoryLocations', locationId)
   if (!location) {
     throw new Error(`Inventory location not found: ${locationId}`)
   }
@@ -176,7 +176,7 @@ export async function loadContentById(
   ctx: DbCtx,
   contentId: Id<'inventoryLocationContents'>,
 ) {
-  const content = await ctx.db.get(contentId)
+  const content = await ctx.db.get('inventoryLocationContents', contentId)
   if (!content) {
     throw new Error(`Inventory content not found: ${contentId}`)
   }
@@ -343,7 +343,7 @@ export async function ensureSystemLocation(
     }),
   )
 
-  return (await ctx.db.get(locationId)) as Doc<'inventoryLocations'>
+  return await loadLocationById(ctx, locationId)
 }
 
 export async function ensurePhysicalLocationByCode(
@@ -372,7 +372,7 @@ export async function ensurePhysicalLocationByCode(
     }),
   )
 
-  return (await ctx.db.get(locationId)) as Doc<'inventoryLocations'>
+  return await loadLocationById(ctx, locationId)
 }
 
 export function summarizeWorkflowBreakdown(

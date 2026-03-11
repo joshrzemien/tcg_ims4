@@ -22,6 +22,8 @@ import type * as inventory_admin from "../inventory/admin.js";
 import type * as inventory_contents from "../inventory/contents.js";
 import type * as inventory_imports from "../inventory/imports.js";
 import type * as inventory_importsSupport from "../inventory/importsSupport.js";
+import type * as inventory_lib_loaders from "../inventory/lib/loaders.js";
+import type * as inventory_lib_readModels from "../inventory/lib/readModels.js";
 import type * as inventory_locations from "../inventory/locations.js";
 import type * as inventory_model from "../inventory/model.js";
 import type * as inventory_shared from "../inventory/shared.js";
@@ -75,6 +77,8 @@ declare const fullApi: ApiFromModules<{
   "inventory/contents": typeof inventory_contents;
   "inventory/imports": typeof inventory_imports;
   "inventory/importsSupport": typeof inventory_importsSupport;
+  "inventory/lib/loaders": typeof inventory_lib_loaders;
+  "inventory/lib/readModels": typeof inventory_lib_readModels;
   "inventory/locations": typeof inventory_locations;
   "inventory/model": typeof inventory_model;
   "inventory/shared": typeof inventory_shared;

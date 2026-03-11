@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { startTransition, useCallback } from 'react'
 import { AppShell } from '../components/AppShell'
-import { PricingDashboard } from '../components/PricingDashboard'
+import { PricingDashboard } from '../features/pricing/PricingDashboard'
 import { normalizeSearchInput } from '~/lib/search'
 
 export type PricingRouteSearch = {

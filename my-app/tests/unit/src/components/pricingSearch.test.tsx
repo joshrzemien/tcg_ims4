@@ -3,7 +3,7 @@
 import { act, useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SeriesTab } from '../../../../src/components/PricingDashboard'
+import { SeriesTab } from '../../../../src/features/pricing/PricingDashboard'
 import { TooltipProvider } from '../../../../src/components/ui/tooltip'
 import {
   PricingPage,

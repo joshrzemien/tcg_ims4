@@ -11,10 +11,10 @@ import {
   RotateCw,
   Trash2,
   TrendingUp,
-  X,
 } from 'lucide-react'
-import { api } from '../../convex/_generated/api'
-import type { Doc, Id } from '../../convex/_generated/dataModel'
+import { api } from '../../../convex/_generated/api'
+import type { Doc, Id } from '../../../convex/_generated/dataModel'
+import type { FlashMessage } from '~/features/shared/components/FlashBanner'
 import { Button } from '~/components/ui/button'
 import { SearchField } from '~/components/ui/search-field'
 import {
@@ -30,9 +30,21 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '~/components/ui/tooltip'
+import { DialogShell } from '~/features/shared/components/DialogShell'
+import { FlashBanner } from '~/features/shared/components/FlashBanner'
+import { LoadingSkeleton } from '~/features/shared/components/LoadingState'
+import { StatusBadge as Badge } from '~/features/shared/components/StatusBadge'
+import { getErrorMessage } from '~/features/shared/lib/errors'
+import {
+  formatCents,
+  formatDate,
+  formatDateTime,
+  relativeTime,
+} from '~/features/shared/lib/formatting'
+import { humanizeToken as humanize } from '~/features/shared/lib/text'
 import { useSearchController } from '~/hooks/useSearchController'
-import { cn } from '~/lib/utils'
 import { normalizeSearchInput } from '~/lib/search'
+import { cn } from '~/lib/utils'
 
 // -- Types --
 
@@ -68,66 +80,6 @@ type TrackingRule = {
 }
 type TrackedSeries = Doc<'pricingTrackedSeries'>
 type TabKey = 'rules' | 'series' | 'issues'
-
-type FlashMessage = {
-  kind: 'success' | 'error'
-  text: string
-} | null
-
-// -- Formatters --
-
-const currencyFormatter = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-})
-
-const dateFormatter = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: '2-digit',
-})
-
-const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-})
-
-function formatCents(cents: number | undefined) {
-  if (typeof cents !== 'number') return '--'
-  return currencyFormatter.format(cents / 100)
-}
-
-function formatDate(ts: number | undefined) {
-  if (typeof ts !== 'number') return '--'
-  return dateFormatter.format(new Date(ts))
-}
-
-function formatDateTime(ts: number | undefined) {
-  if (typeof ts !== 'number') return '--'
-  return dateTimeFormatter.format(new Date(ts))
-}
-
-function relativeTime(ts: number | undefined) {
-  if (typeof ts !== 'number') return 'never'
-  const diff = Date.now() - ts
-  const minutes = Math.floor(diff / 60_000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
-
-function humanize(value: string) {
-  return value.replaceAll('_', ' ')
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown error'
-}
 
 const PICKER_HELPER_TEXT = 'Type at least 2 characters.'
 
@@ -170,101 +122,6 @@ const issueTypeLabels: Record<string, string> = {
   missing_product_price: 'Missing Price',
   missing_manapool_match: 'Missing Manapool',
   sync_error: 'Sync Error',
-}
-
-// -- Shared Components --
-
-function Badge({
-  children,
-  className,
-}: {
-  children: React.ReactNode
-  className: string
-}) {
-  return (
-    <span
-      className={cn(
-        'inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-        className,
-      )}
-    >
-      {children}
-    </span>
-  )
-}
-
-function LoadingSkeleton({ rows = 6 }: { rows?: number }) {
-  return (
-    <div className="rounded border bg-card">
-      <div className="h-8 border-b bg-muted/10" />
-      <div className="space-y-px">
-        {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className="h-8 animate-pulse bg-muted/5" />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function FlashBanner({
-  message,
-  onDismiss,
-}: {
-  message: FlashMessage
-  onDismiss: () => void
-}) {
-  if (!message) return null
-  return (
-    <div
-      className={cn(
-        'flex items-center gap-2 rounded border px-3 py-2 text-xs font-medium',
-        message.kind === 'success'
-          ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
-          : 'border-red-500/20 bg-red-500/5 text-red-400',
-      )}
-    >
-      <span className="flex-1">{message.text}</span>
-      <button type="button" onClick={onDismiss} className="p-0.5">
-        <X className="size-3" />
-      </button>
-    </div>
-  )
-}
-
-function Modal({
-  title,
-  description,
-  onClose,
-  children,
-}: {
-  title: string
-  description: string
-  onClose: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="w-full max-w-2xl rounded-lg border bg-card shadow-2xl">
-        <header className="flex items-start justify-between gap-3 border-b px-4 py-3">
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {description}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            onClick={onClose}
-            aria-label="Close dialog"
-          >
-            <X className="size-3.5" />
-          </button>
-        </header>
-        <div className="max-h-[80vh] overflow-y-auto px-4 py-3">{children}</div>
-      </div>
-    </div>
-  )
 }
 
 // -- Stats Bar --
@@ -1404,7 +1261,7 @@ export function CreateRuleModal({
   }
 
   return (
-    <Modal
+    <DialogShell
       title="Create Tracking Rule"
       description="Track prices for a set, category, or individual product."
       onClose={onClose}
@@ -1730,7 +1587,7 @@ export function CreateRuleModal({
           </Button>
         </div>
       </div>
-    </Modal>
+    </DialogShell>
   )
 }
 

@@ -1,5 +1,5 @@
-import { mutation, query } from '../_generated/server'
 import { v } from 'convex/values'
+import { mutation, query } from '../_generated/server'
 import {
   buildLocationRecord,
   ensurePhysicalLocationByCode,
@@ -92,7 +92,7 @@ export const update = mutation({
       patch.active = args.active
     }
 
-    await ctx.db.patch(args.locationId, patch)
+    await ctx.db.patch('inventoryLocations', args.locationId, patch)
     return args.locationId
   },
 })

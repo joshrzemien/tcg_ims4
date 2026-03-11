@@ -9,29 +9,30 @@ import {
   ShieldAlert,
   Undo2,
 } from 'lucide-react'
-import { api } from '../../convex/_generated/api'
+import { api } from '../../../convex/_generated/api'
+import { isNonRefundableEasyPostLetterShipment } from '../../../shared/shippingRefund'
 import {
   formatShippingMethodLabel,
   normalizeShippingMethod,
-} from '../../shared/shippingMethod'
-import { isNonRefundableEasyPostLetterShipment } from '../../shared/shippingRefund'
+} from '../../../shared/shippingMethod'
 import {
   formatShippingStatusLabel,
   hasRefundedPostage,
   normalizeStatusToken,
-} from '../../shared/shippingStatus'
-import type { Doc } from '../../convex/_generated/dataModel'
-import type { ShippingMethod } from '../../shared/shippingMethod'
-import type { ShippingStatus } from '../../shared/shippingStatus'
+} from '../../../shared/shippingStatus'
+import type { ShippingMethod } from '../../../shared/shippingMethod'
+import type { ShippingStatus } from '../../../shared/shippingStatus'
+import type { Doc } from '../../../convex/_generated/dataModel'
+import type { FlashMessage } from '~/features/shared/components/FlashBanner'
 import { Button } from '~/components/ui/button'
+import { FlashBanner } from '~/features/shared/components/FlashBanner'
+import { getErrorMessage } from '~/features/shared/lib/errors'
+import {
+  formatCents,
+  formatDateTimeLong,
+} from '~/features/shared/lib/formatting'
+import { humanizeToken as humanize } from '~/features/shared/lib/text'
 import { cn } from '~/lib/utils'
-
-type FlashMessage =
-  | {
-      kind: 'success' | 'error'
-      text: string
-    }
-  | null
 
 type StandaloneShipment = Doc<'shipments'> & {
   source: 'standalone'
@@ -92,19 +93,6 @@ const defaultFormState: StandaloneFormState = {
   country: 'US',
 }
 
-const currencyFormatter = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-})
-
-const dateFormatter = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-})
-
 const statusStyles: Record<ShippingStatus, string> = {
   pending: 'border-amber-500/20 bg-amber-500/5 text-amber-400',
   processing: 'border-blue-500/20 bg-blue-500/5 text-blue-400',
@@ -125,14 +113,6 @@ const statusStyles: Record<ShippingStatus, string> = {
   unknown: 'border-slate-500/20 bg-slate-500/5 text-slate-400',
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unknown error'
-}
-
-function humanize(value: string) {
-  return value.replaceAll('_', ' ')
-}
-
 function formatRefundStatus(refundStatus?: string) {
   if (!refundStatus) return 'Not requested'
   return humanize(normalizeStatusToken(refundStatus))
@@ -144,7 +124,7 @@ function formatRateLabel(rate: StandaloneQuote['rate']) {
       ? `, ${rate.deliveryDays}d`
       : ''
 
-  return `${rate.carrier} ${rate.service} · ${currencyFormatter.format(rate.rateCents / 100)}${deliveryDays}`
+  return `${rate.carrier} ${rate.service} · ${formatCents(rate.rateCents)}${deliveryDays}`
 }
 
 function shipmentHasPurchasedLabel(shipment: StandaloneShipment) {
@@ -332,18 +312,7 @@ export function StandalonePostageScreen() {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,430px)_minmax(0,1fr)]">
       <section className="space-y-4">
-        {flashMessage ? (
-          <div
-            className={cn(
-              'rounded-lg border px-3 py-2 text-sm',
-              flashMessage.kind === 'success'
-                ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
-                : 'border-red-500/20 bg-red-500/5 text-red-300',
-            )}
-          >
-            {flashMessage.text}
-          </div>
-        ) : null}
+        <FlashBanner message={flashMessage} onDismiss={() => setFlashMessage(null)} />
 
         <div className="rounded-xl border bg-card p-4">
           <div className="mb-4 flex items-start gap-3">
@@ -604,7 +573,7 @@ export function StandalonePostageScreen() {
                     Purchasing...
                   </>
                 ) : (
-                  `Buy Label ${currencyFormatter.format(quote.rate.rateCents / 100)}`
+                  `Buy Label ${formatCents(quote.rate.rateCents)}`
                 )}
               </Button>
             </div>
@@ -701,7 +670,7 @@ export function StandalonePostageScreen() {
                             Purchased
                           </span>
                           <p className="mt-1 text-foreground">
-                            {dateFormatter.format(shipment.createdAt)}
+                            {formatDateTimeLong(shipment.createdAt)}
                           </p>
                         </div>
                         <div>
@@ -720,9 +689,7 @@ export function StandalonePostageScreen() {
                           </span>
                           <p className="mt-1 text-foreground">
                             {typeof shipment.rateCents === 'number'
-                              ? currencyFormatter.format(
-                                  shipment.rateCents / 100,
-                                )
+                              ? formatCents(shipment.rateCents)
                               : 'Pending'}
                           </p>
                         </div>

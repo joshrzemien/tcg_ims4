@@ -1,14 +1,14 @@
-import { mutation, query } from '../_generated/server'
 import { v } from 'convex/values'
+import { mutation, query } from '../_generated/server'
 import {
   buildCatalogContentIdentityKey,
   buildGradedContentIdentityKey,
-  buildInventoryContentRow,
   buildPendingGradedContentIdentityKey,
   normalizeInventoryQuantity,
   normalizeOptionalString,
   normalizeWorkflowStatus,
 } from './model'
+import { hydrateInventoryContentRows } from './lib/readModels'
 import {
   buildContentRecord,
   ensureLocationAcceptsContents,
@@ -25,12 +25,7 @@ import {
 import type { Doc, Id } from '../_generated/dataModel'
 
 type ContentDoc = Doc<'inventoryLocationContents'>
-type CatalogProductDoc = Doc<'catalogProducts'>
-type CatalogSetDoc = Doc<'catalogSets'>
-type CatalogSkuDoc = Doc<'catalogSkus'>
 type InventoryLocationDoc = Doc<'inventoryLocations'>
-type InventoryUnitDetailDoc = Doc<'inventoryUnitDetails'>
-type PricingTrackedSeriesDoc = Doc<'pricingTrackedSeries'>
 
 export async function receiveCatalogContentIntoLocation(
   ctx: { db: any },
@@ -75,7 +70,7 @@ export async function receiveCatalogContentIntoLocation(
       }),
     )
 
-    await ctx.db.patch(contentId, {
+    await ctx.db.patch('inventoryLocationContents', contentId, {
       contentIdentityKey: buildPendingGradedContentIdentityKey(contentId),
     })
 
@@ -117,7 +112,7 @@ export async function receiveCatalogContentIntoLocation(
     }
 
     const nextQuantity = existing.quantity + quantity
-    await ctx.db.patch(existing._id, {
+    await ctx.db.patch('inventoryLocationContents', existing._id, {
       quantity: nextQuantity,
       ...(notes ? { notes } : {}),
       updatedAt: Date.now(),
@@ -177,166 +172,11 @@ export async function receiveCatalogContentIntoLocation(
   return contentId
 }
 
-async function loadProductsByKey(
-  ctx: { db: any },
-  productKeys: Iterable<string>,
-) {
-  const entries = await Promise.all(
-    [...new Set(productKeys)].map(async (productKey) => {
-      const product = await ctx.db
-        .query('catalogProducts')
-        .withIndex('by_key', (q: any) => q.eq('key', productKey))
-        .unique()
-
-      return [productKey, product] as const
-    }),
-  )
-
-  return new Map<string, CatalogProductDoc | null>(entries)
-}
-
-async function loadSkusByKey(ctx: { db: any }, skuKeys: Iterable<string>) {
-  const entries = await Promise.all(
-    [...new Set(skuKeys)].map(async (skuKey) => {
-      const sku = await ctx.db
-        .query('catalogSkus')
-        .withIndex('by_key', (q: any) => q.eq('key', skuKey))
-        .unique()
-
-      return [skuKey, sku] as const
-    }),
-  )
-
-  return new Map<string, CatalogSkuDoc | null>(entries)
-}
-
-async function loadSetsByKey(ctx: { db: any }, setKeys: Iterable<string>) {
-  const entries = await Promise.all(
-    [...new Set(setKeys)].map(async (setKey) => {
-      const set = await ctx.db
-        .query('catalogSets')
-        .withIndex('by_key', (q: any) => q.eq('key', setKey))
-        .unique()
-
-      return [setKey, set] as const
-    }),
-  )
-
-  return new Map<string, CatalogSetDoc | null>(entries)
-}
-
-async function loadTrackedSeriesByProductKey(
-  ctx: { db: any },
-  productKeys: Iterable<string>,
-) {
-  const entries = await Promise.all(
-    [...new Set(productKeys)].map(async (productKey) => {
-      const trackedSeries = await ctx.db
-        .query('pricingTrackedSeries')
-        .withIndex('by_catalogProductKey', (q: any) =>
-          q.eq('catalogProductKey', productKey),
-        )
-        .collect()
-
-      return [productKey, trackedSeries] as const
-    }),
-  )
-
-  return new Map<string, Array<PricingTrackedSeriesDoc>>(entries)
-}
-
-async function loadLocationsById(
-  ctx: { db: any },
-  locationIds: Iterable<Id<'inventoryLocations'>>,
-) {
-  const entries = await Promise.all(
-    [...new Set(locationIds)].map(async (locationId) => {
-      const location = await ctx.db.get(locationId)
-      return [locationId, location] as const
-    }),
-  )
-
-  return new Map<Id<'inventoryLocations'>, InventoryLocationDoc | null>(entries)
-}
-
-async function loadUnitDetailsByContentId(
-  ctx: { db: any },
-  contentIds: Iterable<Id<'inventoryLocationContents'>>,
-) {
-  const entries = await Promise.all(
-    [...new Set(contentIds)].map(async (contentId) => {
-      const detail = await ctx.db
-        .query('inventoryUnitDetails')
-        .withIndex('by_contentId', (q: any) => q.eq('contentId', contentId))
-        .unique()
-
-      return [contentId, detail] as const
-    }),
-  )
-
-  return new Map<Id<'inventoryLocationContents'>, InventoryUnitDetailDoc | null>(
-    entries,
-  )
-}
-
 async function hydrateContentRows(
   ctx: { db: any },
   contents: Array<ContentDoc>,
 ) {
-  const productsByKey = await loadProductsByKey(
-    ctx,
-    contents.map((content) => content.catalogProductKey),
-  )
-  const skusByKey = await loadSkusByKey(
-    ctx,
-    contents
-      .map((content) => content.catalogSkuKey)
-      .filter((value): value is string => typeof value === 'string'),
-  )
-  const trackedSeriesByProductKey = await loadTrackedSeriesByProductKey(
-    ctx,
-    contents.map((content) => content.catalogProductKey),
-  )
-  const locationsById = await loadLocationsById(
-    ctx,
-    contents.map((content) => content.locationId),
-  )
-  const unitDetailsByContentId = await loadUnitDetailsByContentId(
-    ctx,
-    contents.map((content) => content._id),
-  )
-  const setsByKey = await loadSetsByKey(
-    ctx,
-    contents
-      .map((content) => productsByKey.get(content.catalogProductKey)?.setKey)
-      .filter((value): value is string => typeof value === 'string'),
-  )
-
-  return contents.flatMap((content) => {
-    const product = productsByKey.get(content.catalogProductKey)
-    const location = locationsById.get(content.locationId)
-
-    if (!product || !location) {
-      return []
-    }
-
-    const sku =
-      typeof content.catalogSkuKey === 'string'
-        ? skusByKey.get(content.catalogSkuKey) ?? null
-        : null
-
-    return [
-      buildInventoryContentRow({
-        content,
-        location,
-        product,
-        sku,
-        set: setsByKey.get(product.setKey) ?? null,
-        trackedSeries: trackedSeriesByProductKey.get(product.key) ?? [],
-        unitDetail: unitDetailsByContentId.get(content._id) ?? null,
-      }),
-    ]
-  })
+  return await hydrateInventoryContentRows(ctx, contents)
 }
 
 async function removeContentRecord(
@@ -349,10 +189,10 @@ async function removeContentRecord(
 ) {
   const unitDetail = await loadUnitDetailByContentId(ctx, content._id)
   if (unitDetail) {
-    await ctx.db.delete(unitDetail._id)
+    await ctx.db.delete('inventoryUnitDetails', unitDetail._id)
   }
 
-  await ctx.db.delete(content._id)
+  await ctx.db.delete('inventoryLocationContents', content._id)
   await insertInventoryEvent(ctx, {
     eventType: 'content_deleted',
     actor: params.actor,
@@ -451,7 +291,7 @@ export const adjustQuantity = mutation({
       return null
     }
 
-    await ctx.db.patch(content._id, {
+    await ctx.db.patch('inventoryLocationContents', content._id, {
       quantity: nextQuantity,
       updatedAt: Date.now(),
     })
@@ -532,15 +372,15 @@ export const moveQuantity = mutation({
           unitIdentityKey: unitDetail.unitIdentityKey,
         })
 
-        await ctx.db.patch(targetContentId, {
+        await ctx.db.patch('inventoryLocationContents', targetContentId, {
           contentIdentityKey: nextIdentityKey,
         })
-        await ctx.db.patch(unitDetail._id, {
+        await ctx.db.patch('inventoryUnitDetails', unitDetail._id, {
           contentId: targetContentId,
           updatedAt: Date.now(),
         })
       } else {
-        await ctx.db.patch(targetContentId, {
+        await ctx.db.patch('inventoryLocationContents', targetContentId, {
           contentIdentityKey: buildPendingGradedContentIdentityKey(targetContentId),
         })
       }
@@ -567,7 +407,7 @@ export const moveQuantity = mutation({
 
         targetBeforeQuantity = existingTarget.quantity
         targetContentId = existingTarget._id
-        await ctx.db.patch(existingTarget._id, {
+        await ctx.db.patch('inventoryLocationContents', existingTarget._id, {
           quantity: existingTarget.quantity + quantity,
           updatedAt: Date.now(),
         })
@@ -589,9 +429,9 @@ export const moveQuantity = mutation({
     }
 
     if (nextSourceQuantity === 0) {
-      await ctx.db.delete(source._id)
+      await ctx.db.delete('inventoryLocationContents', source._id)
     } else {
-      await ctx.db.patch(source._id, {
+      await ctx.db.patch('inventoryLocationContents', source._id, {
         quantity: nextSourceQuantity,
         updatedAt: Date.now(),
       })
@@ -657,7 +497,7 @@ export const updateWorkflowState = mutation({
     const workflowTag = normalizeOptionalString(args.workflowTag)
     const notes = normalizeOptionalString(args.notes)
 
-    await ctx.db.patch(content._id, {
+    await ctx.db.patch('inventoryLocationContents', content._id, {
       workflowStatus,
       workflowTag,
       notes,

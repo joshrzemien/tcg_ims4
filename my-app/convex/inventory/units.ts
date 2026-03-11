@@ -1,5 +1,5 @@
-import { mutation, query } from '../_generated/server'
 import { v } from 'convex/values'
+import { mutation, query } from '../_generated/server'
 import {
   buildGradedContentIdentityKey,
   buildUnitIdentityKey,
@@ -52,7 +52,7 @@ export const upsertGradedDetail = mutation({
     const now = Date.now()
 
     if (existingByContent) {
-      await ctx.db.patch(existingByContent._id, {
+      await ctx.db.patch('inventoryUnitDetails', existingByContent._id, {
         unitKind: 'graded_card',
         gradingCompany: args.gradingCompany.trim(),
         gradeLabel: args.gradeLabel.trim(),
@@ -81,7 +81,7 @@ export const upsertGradedDetail = mutation({
       })
     }
 
-    await ctx.db.patch(content._id, {
+    await ctx.db.patch('inventoryLocationContents', content._id, {
       contentIdentityKey: buildGradedContentIdentityKey({
         locationId: content.locationId,
         unitIdentityKey,

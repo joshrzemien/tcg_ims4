@@ -1,7 +1,7 @@
 import { mutation } from '../_generated/server'
 import {
-  ensureSystemLocation,
   SYSTEM_LOCATION_CODES,
+  ensureSystemLocation,
 } from './shared'
 
 async function ensureDefaultSystemLocations(ctx: { db: any }) {

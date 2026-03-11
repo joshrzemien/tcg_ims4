@@ -172,7 +172,7 @@ async function loadInventoryLocationsById(
 ) {
   const entries = await Promise.all(
     [...new Set(locationIds)].map(async (locationId) => {
-      const location = await ctx.db.get(locationId)
+      const location = await ctx.db.get('inventoryLocations', locationId)
       return [locationId, location as InventoryLocationDoc | null] as const
     }),
   )
