@@ -31,6 +31,7 @@ import type * as catalog_writers_sets from "../catalog/writers/sets.js";
 import type * as catalog_writers_skus from "../catalog/writers/skus.js";
 import type * as catalog_writers_syncState from "../catalog/writers/syncState.js";
 import type * as cron from "../cron.js";
+import type * as http from "../http.js";
 import type * as inventory_admin from "../inventory/admin.js";
 import type * as inventory_contents from "../inventory/contents.js";
 import type * as inventory_imports from "../inventory/imports.js";
@@ -103,6 +104,9 @@ import type * as pricing_workflows_snapshotCapture from "../pricing/workflows/sn
 import type * as pricing_writers_dashboard from "../pricing/writers/dashboard.js";
 import type * as pricing_writers_issues from "../pricing/writers/issues.js";
 import type * as pricing_writers_rules from "../pricing/writers/rules.js";
+import type * as printing_mutations from "../printing/mutations.js";
+import type * as printing_queries from "../printing/queries.js";
+import type * as printing_types from "../printing/types.js";
 import type * as shipments_actions from "../shipments/actions.js";
 import type * as shipments_mutations from "../shipments/mutations.js";
 import type * as shipments_queries from "../shipments/queries.js";
@@ -151,6 +155,7 @@ declare const fullApi: ApiFromModules<{
   "catalog/writers/skus": typeof catalog_writers_skus;
   "catalog/writers/syncState": typeof catalog_writers_syncState;
   cron: typeof cron;
+  http: typeof http;
   "inventory/admin": typeof inventory_admin;
   "inventory/contents": typeof inventory_contents;
   "inventory/imports": typeof inventory_imports;
@@ -223,6 +228,9 @@ declare const fullApi: ApiFromModules<{
   "pricing/writers/dashboard": typeof pricing_writers_dashboard;
   "pricing/writers/issues": typeof pricing_writers_issues;
   "pricing/writers/rules": typeof pricing_writers_rules;
+  "printing/mutations": typeof printing_mutations;
+  "printing/queries": typeof printing_queries;
+  "printing/types": typeof printing_types;
   "shipments/actions": typeof shipments_actions;
   "shipments/mutations": typeof shipments_mutations;
   "shipments/queries": typeof shipments_queries;

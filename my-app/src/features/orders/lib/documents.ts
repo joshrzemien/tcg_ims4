@@ -1,4 +1,8 @@
-import type { ExportDocumentResult } from '../types'
+type DownloadableDocumentResult = {
+  base64Data: string
+  fileName: string
+  mimeType: string
+}
 
 export function normalizeBase64DocumentData(base64Data: string): {
   normalizedBase64Data: string
@@ -38,7 +42,10 @@ export function normalizeBase64DocumentData(base64Data: string): {
   return { normalizedBase64Data, mimeType }
 }
 
-export function decodeBase64Document(base64Data: string, mimeType: string): Blob {
+export function decodeBase64Document(
+  base64Data: string,
+  mimeType: string,
+): Blob {
   const normalized = normalizeBase64DocumentData(base64Data)
   const binary = globalThis.atob(normalized.normalizedBase64Data)
   const bytes = new Uint8Array(binary.length)
@@ -50,7 +57,7 @@ export function decodeBase64Document(base64Data: string, mimeType: string): Blob
   return new Blob([bytes], { type: normalized.mimeType ?? mimeType })
 }
 
-export function downloadDocument(result: ExportDocumentResult) {
+export function downloadDocument(result: DownloadableDocumentResult) {
   const blob = decodeBase64Document(result.base64Data, result.mimeType)
   const url = window.URL.createObjectURL(blob)
   const link = document.createElement('a')

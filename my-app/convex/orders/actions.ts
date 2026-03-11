@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { action } from '../_generated/server'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
+import { DEFAULT_PRINTER_STATION_KEY } from '../../shared/printing'
 import {
   exportTcgplayerPackingSlips,
   exportTcgplayerPullSheets,
@@ -11,17 +12,63 @@ import type { Doc, Id } from '../_generated/dataModel'
 type OrderDoc = Doc<'orders'>
 
 type ExportDocumentResult = {
-  base64Data: string
+  printJobId: Id<'printJobs'>
+  printStatus: 'queued'
+  stationKey: string
   fileName: string
   mimeType: string
   orderCount: number
 }
 
+function normalizeBase64DocumentData(base64Data: string) {
+  let normalizedBase64Data = base64Data.trim()
+  let mimeType: string | undefined
+
+  const dataUrlMatch = normalizedBase64Data.match(
+    /^data:([^;,]+)?;base64,([\s\S]+)$/i,
+  )
+  if (dataUrlMatch) {
+    mimeType = dataUrlMatch[1]
+    normalizedBase64Data = dataUrlMatch[2]
+  }
+
+  normalizedBase64Data = normalizedBase64Data
+    .replace(/\s+/g, '')
+    .replaceAll('-', '+')
+    .replaceAll('_', '/')
+
+  const paddingRemainder = normalizedBase64Data.length % 4
+  if (paddingRemainder === 1) {
+    throw new Error('TCGplayer returned an invalid document encoding.')
+  }
+  if (paddingRemainder > 1) {
+    normalizedBase64Data = normalizedBase64Data.padEnd(
+      normalizedBase64Data.length + (4 - paddingRemainder),
+      '=',
+    )
+  }
+
+  if (!/^[A-Za-z0-9+/=]+$/.test(normalizedBase64Data)) {
+    throw new Error('TCGplayer returned a document in an unexpected format.')
+  }
+
+  return { normalizedBase64Data, mimeType }
+}
+
+function decodeBase64Document(base64Data: string, mimeType: string): Blob {
+  const normalized = normalizeBase64DocumentData(base64Data)
+  const binary = globalThis.atob(normalized.normalizedBase64Data)
+  const bytes = new Uint8Array(binary.length)
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+
+  return new Blob([bytes], { type: normalized.mimeType ?? mimeType })
+}
+
 function formatTimestampForFileName(value: number): string {
-  return new Date(value)
-    .toISOString()
-    .replaceAll(':', '')
-    .replaceAll('.', '')
+  return new Date(value).toISOString().replaceAll(':', '').replaceAll('.', '')
 }
 
 function buildFallbackFileName(
@@ -30,12 +77,11 @@ function buildFallbackFileName(
   mimeType: string,
 ): string {
   const lowerMimeType = mimeType.toLowerCase()
-  const extension =
-    lowerMimeType.includes('csv')
-      ? 'csv'
-      : lowerMimeType.includes('pdf')
-        ? 'pdf'
-        : 'bin'
+  const extension = lowerMimeType.includes('csv')
+    ? 'csv'
+    : lowerMimeType.includes('pdf')
+      ? 'pdf'
+      : 'bin'
 
   return `${prefix}-${orderCount}-orders-${formatTimestampForFileName(Date.now())}.${extension}`
 }
@@ -45,7 +91,9 @@ async function loadOrders(
   orderIds: Array<Id<'orders'>>,
 ): Promise<Array<OrderDoc>> {
   const orders = await Promise.all(
-    orderIds.map((orderId) => ctx.runQuery(api.orders.queries.getById, { orderId })),
+    orderIds.map((orderId) =>
+      ctx.runQuery(api.orders.queries.getById, { orderId }),
+    ),
   )
 
   const missingIds = orderIds.filter((_, index) => !orders[index])
@@ -56,8 +104,13 @@ async function loadOrders(
   return orders as Array<OrderDoc>
 }
 
-function filterTcgplayerOrders(orders: Array<OrderDoc>, label: string): Array<OrderDoc> {
-  const tcgplayerOrders = orders.filter((order) => order.channel === 'tcgplayer')
+function filterTcgplayerOrders(
+  orders: Array<OrderDoc>,
+  label: string,
+): Array<OrderDoc> {
+  const tcgplayerOrders = orders.filter(
+    (order) => order.channel === 'tcgplayer',
+  )
 
   if (tcgplayerOrders.length === 0) {
     throw new Error(`Select at least one TCGplayer order to export ${label}.`)
@@ -72,12 +125,54 @@ function requireValidTimezoneOffset(timezoneOffset: number) {
   }
 }
 
+async function enqueueStoredDocumentJob(
+  ctx: ActionCtx,
+  args: {
+    jobType: Doc<'printJobs'>['jobType']
+    orderIds: Array<Id<'orders'>>
+    orderNumbers: Array<string>
+    base64Data: string
+    fileName: string
+    mimeType: string
+  },
+): Promise<ExportDocumentResult> {
+  const blob = decodeBase64Document(args.base64Data, args.mimeType)
+  const storageId = await ctx.storage.store(blob)
+  const printDispatch = await ctx.runMutation(
+    internal.printing.mutations.enqueueJob,
+    {
+      stationKey: DEFAULT_PRINTER_STATION_KEY,
+      jobType: args.jobType,
+      sourceKind: 'stored_document',
+      storageId,
+      fileName: args.fileName,
+      mimeType: blob.type || args.mimeType,
+      copies: 1,
+      dedupeKey: `${args.jobType}:${[...args.orderIds].sort().join(',')}:${args.fileName}`,
+      orderIds: args.orderIds,
+      metadata: {
+        orderCount: args.orderNumbers.length,
+      },
+    },
+  )
+
+  return {
+    ...printDispatch,
+    fileName: args.fileName,
+    mimeType: blob.type || args.mimeType,
+    orderCount: args.orderNumbers.length,
+  }
+}
+
 export const exportPullSheets = action({
   args: {
     orderIds: v.array(v.id('orders')),
     timezoneOffset: v.number(),
   },
-  handler: async (ctx, { orderIds, timezoneOffset }): Promise<ExportDocumentResult> => {
+  handler: async (
+    ctx,
+    { orderIds, timezoneOffset },
+  ): Promise<ExportDocumentResult> => {
     if (orderIds.length === 0) {
       throw new Error('Select at least one order to export pull sheets.')
     }
@@ -93,19 +188,22 @@ export const exportPullSheets = action({
       orderNumbers,
       timezoneOffset,
     })
+    const fileName =
+      base64Data.fileName ??
+      buildFallbackFileName(
+        'tcgplayer-pull-sheets',
+        orderNumbers.length,
+        base64Data.mimeType,
+      )
 
-    return {
+    return await enqueueStoredDocumentJob(ctx, {
+      jobType: 'pull_sheet',
+      orderIds: orders.map((order) => order._id),
+      orderNumbers,
       base64Data: base64Data.base64Data,
-      fileName:
-        base64Data.fileName ??
-        buildFallbackFileName(
-          'tcgplayer-pull-sheets',
-          orderNumbers.length,
-          base64Data.mimeType,
-        ),
+      fileName,
       mimeType: base64Data.mimeType,
-      orderCount: orderNumbers.length,
-    }
+    })
   },
 })
 
@@ -114,7 +212,10 @@ export const exportPackingSlips = action({
     orderIds: v.array(v.id('orders')),
     timezoneOffset: v.number(),
   },
-  handler: async (ctx, { orderIds, timezoneOffset }): Promise<ExportDocumentResult> => {
+  handler: async (
+    ctx,
+    { orderIds, timezoneOffset },
+  ): Promise<ExportDocumentResult> => {
     if (orderIds.length === 0) {
       throw new Error('Select at least one order to export packing slips.')
     }
@@ -130,18 +231,21 @@ export const exportPackingSlips = action({
       orderNumbers,
       timezoneOffset,
     })
+    const fileName =
+      base64Data.fileName ??
+      buildFallbackFileName(
+        'tcgplayer-packing-slips',
+        orderNumbers.length,
+        base64Data.mimeType,
+      )
 
-    return {
+    return await enqueueStoredDocumentJob(ctx, {
+      jobType: 'packing_slip',
+      orderIds: orders.map((order) => order._id),
+      orderNumbers,
       base64Data: base64Data.base64Data,
-      fileName:
-        base64Data.fileName ??
-        buildFallbackFileName(
-          'tcgplayer-packing-slips',
-          orderNumbers.length,
-          base64Data.mimeType,
-        ),
+      fileName,
       mimeType: base64Data.mimeType,
-      orderCount: orderNumbers.length,
-    }
+    })
   },
 })

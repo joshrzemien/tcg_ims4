@@ -4,9 +4,7 @@ import {
   deriveShipmentShippingMethod,
   normalizeShippingMethod,
 } from '../../shared/shippingMethod'
-import {
-  deriveShipmentShippingStatus,
-} from '../utils/shippingStatus'
+import { deriveShipmentShippingStatus } from '../utils/shippingStatus'
 import {
   buildOrderShipmentState,
   materializedOrderShipmentStateEquals,
@@ -37,16 +35,22 @@ function normalizeAddressSnapshot(value: unknown) {
     ...(typeof address.company === 'string'
       ? { company: address.company }
       : {}),
-    ...(typeof address.street1 === 'string' ? { street1: address.street1 } : {}),
-    ...(typeof address.street2 === 'string' ? { street2: address.street2 } : {}),
+    ...(typeof address.street1 === 'string'
+      ? { street1: address.street1 }
+      : {}),
+    ...(typeof address.street2 === 'string'
+      ? { street2: address.street2 }
+      : {}),
     ...(typeof address.city === 'string' ? { city: address.city } : {}),
     ...(typeof address.state === 'string' ? { state: address.state } : {}),
     ...(typeof address.zip === 'string' ? { zip: address.zip } : {}),
-    ...(typeof address.country === 'string' ? { country: address.country } : {}),
+    ...(typeof address.country === 'string'
+      ? { country: address.country }
+      : {}),
     ...(typeof address.phone === 'string' ? { phone: address.phone } : {}),
     ...(typeof address.email === 'string' ? { email: address.email } : {}),
-    ...((typeof address.residential === 'boolean' ||
-      typeof address.residential === 'string')
+    ...(typeof address.residential === 'boolean' ||
+    typeof address.residential === 'string'
       ? { residential: address.residential }
       : {}),
   }
@@ -107,10 +111,11 @@ export const upsertShipment = internalMutation({
     }
     const previousOrderId = existing?.orderId
 
+    let shipmentId = existing?._id
     if (existing) {
       await ctx.db.patch('shipments', existing._id, persistedShipment)
     } else {
-      await ctx.db.insert('shipments', persistedShipment)
+      shipmentId = await ctx.db.insert('shipments', persistedShipment)
     }
 
     const nextOrderId = shipment.orderId ?? existing?.orderId
@@ -119,6 +124,8 @@ export const upsertShipment = internalMutation({
     if (previousOrderId && previousOrderId !== nextOrderId) {
       await syncOrderDerivedFields(ctx, previousOrderId)
     }
+
+    return shipmentId
   },
 })
 

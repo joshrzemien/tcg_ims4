@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { syncMarketplaceFulfillmentForOrder } from '../../../../convex/shipments/workflows/fulfillmentSync'
 
 const { markTcgplayerOrderShippedMock } = vi.hoisted(() => ({
   markTcgplayerOrderShippedMock: vi.fn(),
@@ -7,8 +8,6 @@ const { markTcgplayerOrderShippedMock } = vi.hoisted(() => ({
 vi.mock('../../../../convex/orders/sources/tcgplayer', () => ({
   markTcgplayerOrderShipped: markTcgplayerOrderShippedMock,
 }))
-
-import { syncMarketplaceFulfillmentForOrder } from '../../../../convex/shipments/workflows/fulfillmentSync'
 
 describe('convex/shipments/workflows/fulfillmentSync', () => {
   beforeEach(() => {

@@ -2,10 +2,7 @@ import { v } from 'convex/values'
 import { internal } from '../../_generated/api'
 import { internalAction } from '../../_generated/server'
 import { chunkArray, loadAllPages } from '../../lib/collections'
-import {
-  buildIssueKey,
-  resolveSeriesSnapshot,
-} from '../normalizers'
+import { buildIssueKey, resolveSeriesSnapshot } from '../normalizers'
 import {
   isActiveUnignoredIssue,
   seriesSnapshotNeedsPatch,
@@ -34,7 +31,7 @@ export const captureSeriesSnapshotsForSetMutation = internalAction({
       Array<Doc<'catalogSkus'>>,
       Array<Doc<'pricingResolutionIssues'>>,
     ] = await Promise.all([
-      loadAllPages({
+      loadAllPages<Doc<'pricingTrackedSeries'>>({
         pageSize: PRICING_SYNC_PAGE_SIZE,
         loadPage: async (paginationOpts) =>
           await ctx.runQuery(
@@ -42,7 +39,7 @@ export const captureSeriesSnapshotsForSetMutation = internalAction({
             { setKey, paginationOpts },
           ),
       }),
-      loadAllPages({
+      loadAllPages<Doc<'catalogProducts'>>({
         pageSize: PRICING_SYNC_PAGE_SIZE,
         loadPage: async (paginationOpts) =>
           await ctx.runQuery(
@@ -50,7 +47,7 @@ export const captureSeriesSnapshotsForSetMutation = internalAction({
             { setKey, paginationOpts },
           ),
       }),
-      loadAllPages({
+      loadAllPages<Doc<'catalogSkus'>>({
         pageSize: PRICING_SYNC_PAGE_SIZE,
         loadPage: async (paginationOpts) =>
           await ctx.runQuery(
@@ -58,7 +55,7 @@ export const captureSeriesSnapshotsForSetMutation = internalAction({
             { setKey, paginationOpts },
           ),
       }),
-      loadAllPages({
+      loadAllPages<Doc<'pricingResolutionIssues'>>({
         pageSize: PRICING_SYNC_PAGE_SIZE,
         loadPage: async (paginationOpts) =>
           await ctx.runQuery(
@@ -230,24 +227,27 @@ export const captureSeriesSnapshotsForSetMutation = internalAction({
 
     for (let index = 0; index < batchIterations; index += 1) {
       const start = index * PRICING_SYNC_WRITE_BATCH_SIZE
-      await ctx.runMutation(internal.pricing.mutations.applySeriesSnapshotBatch, {
-        historyInserts: historyInserts.slice(
-          start,
-          start + PRICING_SYNC_WRITE_BATCH_SIZE,
-        ),
-        seriesPatches: seriesPatches.slice(
-          start,
-          start + PRICING_SYNC_WRITE_BATCH_SIZE,
-        ),
-        issueInserts: issueInserts.slice(
-          start,
-          start + PRICING_SYNC_WRITE_BATCH_SIZE,
-        ),
-        issuePatches: issuePatches.slice(
-          start,
-          start + PRICING_SYNC_WRITE_BATCH_SIZE,
-        ),
-      })
+      await ctx.runMutation(
+        internal.pricing.mutations.applySeriesSnapshotBatch,
+        {
+          historyInserts: historyInserts.slice(
+            start,
+            start + PRICING_SYNC_WRITE_BATCH_SIZE,
+          ),
+          seriesPatches: seriesPatches.slice(
+            start,
+            start + PRICING_SYNC_WRITE_BATCH_SIZE,
+          ),
+          issueInserts: issueInserts.slice(
+            start,
+            start + PRICING_SYNC_WRITE_BATCH_SIZE,
+          ),
+          issuePatches: issuePatches.slice(
+            start,
+            start + PRICING_SYNC_WRITE_BATCH_SIZE,
+          ),
+        },
+      )
     }
 
     for (const issuePatchesBatch of chunkArray(

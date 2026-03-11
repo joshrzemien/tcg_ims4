@@ -114,6 +114,32 @@ const pricingResolutionIssueTypeValidator = v.union(
   v.literal('sync_error'),
 )
 
+const printerStationStatusValidator = v.union(
+  v.literal('online'),
+  v.literal('offline'),
+  v.literal('unknown'),
+)
+
+const printJobTypeValidator = v.union(
+  v.literal('shipping_label'),
+  v.literal('packing_slip'),
+  v.literal('pull_sheet'),
+)
+
+const printJobStatusValidator = v.union(
+  v.literal('queued'),
+  v.literal('claimed'),
+  v.literal('printing'),
+  v.literal('printed'),
+  v.literal('failed'),
+  v.literal('cancelled'),
+)
+
+const printSourceKindValidator = v.union(
+  v.literal('remote_url'),
+  v.literal('stored_document'),
+)
+
 const easypostAddressSnapshotValidator = v.object({
   id: v.optional(v.string()),
   name: v.optional(v.string()),
@@ -352,10 +378,20 @@ export default defineSchema({
     .index('by_categoryKey_updatedAt', ['categoryKey', 'updatedAt'])
     .index('by_active_setKey', ['active', 'setKey'])
     .index('by_active_setKey_updatedAt', ['active', 'setKey', 'updatedAt'])
-    .index('by_active_categoryKey_updatedAt', ['active', 'categoryKey', 'updatedAt'])
+    .index('by_active_categoryKey_updatedAt', [
+      'active',
+      'categoryKey',
+      'updatedAt',
+    ])
     .searchIndex('search_searchText', {
       searchField: 'searchText',
-      filterFields: ['active', 'categoryKey', 'setKey', 'pricingSource', 'printingKey'],
+      filterFields: [
+        'active',
+        'categoryKey',
+        'setKey',
+        'pricingSource',
+        'printingKey',
+      ],
     }),
   pricingTrackedSeriesRules: defineTable({
     key: v.string(),
@@ -380,8 +416,7 @@ export default defineSchema({
     listingCount: v.optional(v.number()),
     manapoolPriceCents: v.optional(v.number()),
     manapoolQuantity: v.optional(v.number()),
-  })
-    .index('by_seriesKey_effectiveAt', ['seriesKey', 'effectiveAt']),
+  }).index('by_seriesKey_effectiveAt', ['seriesKey', 'effectiveAt']),
   pricingResolutionIssues: defineTable({
     key: v.string(),
     catalogProductKey: v.string(),
@@ -408,8 +443,16 @@ export default defineSchema({
     ])
     .index('by_active', ['active'])
     .index('by_active_lastSeenAt', ['active', 'lastSeenAt'])
-    .index('by_active_issueType_lastSeenAt', ['active', 'issueType', 'lastSeenAt'])
-    .index('by_active_isIgnored_lastSeenAt', ['active', 'isIgnored', 'lastSeenAt'])
+    .index('by_active_issueType_lastSeenAt', [
+      'active',
+      'issueType',
+      'lastSeenAt',
+    ])
+    .index('by_active_isIgnored_lastSeenAt', [
+      'active',
+      'isIgnored',
+      'lastSeenAt',
+    ])
     .index('by_active_isIgnored_issueType_lastSeenAt', [
       'active',
       'isIgnored',
@@ -421,7 +464,11 @@ export default defineSchema({
     .index('by_setKey', ['setKey'])
     .index('by_setKey_lastSeenAt', ['setKey', 'lastSeenAt'])
     .index('by_categoryKey_lastSeenAt', ['categoryKey', 'lastSeenAt'])
-    .index('by_active_categoryKey_lastSeenAt', ['active', 'categoryKey', 'lastSeenAt']),
+    .index('by_active_categoryKey_lastSeenAt', [
+      'active',
+      'categoryKey',
+      'lastSeenAt',
+    ]),
   pricingDashboardStats: defineTable({
     key: v.string(),
     totalTrackedSeries: v.number(),
@@ -529,6 +576,63 @@ export default defineSchema({
     .index('by_fromLocationId_occurredAt', ['fromLocationId', 'occurredAt'])
     .index('by_toLocationId_occurredAt', ['toLocationId', 'occurredAt'])
     .index('by_eventType', ['eventType']),
+  printerStations: defineTable({
+    key: v.string(),
+    name: v.string(),
+    status: printerStationStatusValidator,
+    lastSeenAt: v.optional(v.number()),
+    lastHeartbeatAt: v.optional(v.number()),
+    capabilities: v.array(printJobTypeValidator),
+    agentVersion: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_key', ['key'])
+    .index('by_status', ['status'])
+    .index('by_lastSeenAt', ['lastSeenAt']),
+  printJobs: defineTable({
+    stationKey: v.string(),
+    jobType: printJobTypeValidator,
+    status: printJobStatusValidator,
+    sourceKind: printSourceKindValidator,
+    sourceUrl: v.optional(v.string()),
+    storageId: v.optional(v.id('_storage')),
+    fileName: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    copies: v.number(),
+    dedupeKey: v.optional(v.string()),
+    orderId: v.optional(v.id('orders')),
+    shipmentId: v.optional(v.id('shipments')),
+    orderIds: v.optional(v.array(v.id('orders'))),
+    requestedAt: v.number(),
+    requestedBy: v.literal('app'),
+    claimedAt: v.optional(v.number()),
+    claimedByStationKey: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    failedAt: v.optional(v.number()),
+    failureCode: v.optional(v.string()),
+    failureMessage: v.optional(v.string()),
+    attemptCount: v.number(),
+    lastHeartbeatAt: v.optional(v.number()),
+    metadata: v.object({
+      orderNumber: v.optional(v.string()),
+      orderCount: v.optional(v.number()),
+      carrier: v.optional(v.string()),
+      service: v.optional(v.string()),
+    }),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_stationKey_status_requestedAt', [
+      'stationKey',
+      'status',
+      'requestedAt',
+    ])
+    .index('by_status_requestedAt', ['status', 'requestedAt'])
+    .index('by_orderId_createdAt', ['orderId', 'createdAt'])
+    .index('by_shipmentId_createdAt', ['shipmentId', 'createdAt'])
+    .index('by_dedupeKey', ['dedupeKey']),
   shipments: defineTable({
     orderId: v.optional(v.id('orders')),
     status: shippingStatusValidator, // Canonical EasyPost-derived order shipping status
@@ -621,8 +725,5 @@ export default defineSchema({
   })
     .index('by_externalId', ['externalId'])
     .index('by_createdAt', ['createdAt'])
-    .index('by_isFulfilled_createdAt', [
-      'isFulfilled',
-      'createdAt',
-    ]),
+    .index('by_isFulfilled_createdAt', ['isFulfilled', 'createdAt']),
 })

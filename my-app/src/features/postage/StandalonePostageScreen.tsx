@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useAction, useQuery } from 'convex/react'
+import { useAction, useMutation, useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
 import { defaultFormState } from './constants'
 import { StandalonePurchaseForm } from './components/StandalonePurchaseForm'
@@ -12,9 +12,14 @@ import type {
   StandaloneQuote,
   StandaloneShipment,
 } from './types'
+import type {
+  PrintJobSummary,
+  PrinterStationSummary,
+} from '~/features/orders/types'
 import { humanizeToken as humanize } from '~/features/shared/lib/text'
 import { getErrorMessage } from '~/features/shared/lib/errors'
 import { FlashBanner } from '~/features/shared/components/FlashBanner'
+import { PrinterStationStatusCard } from '~/features/shared/components/PrinterStationStatusCard'
 
 export function StandalonePostageScreen() {
   const shipments = useQuery(api.shipments.queries.listStandalone, {
@@ -26,7 +31,15 @@ export function StandalonePostageScreen() {
   const purchaseStandaloneLabel = useAction(
     api.shipments.actions.purchaseStandaloneLabel,
   )
-  const refundStandaloneLabel = useAction(api.shipments.actions.refundStandaloneLabel)
+  const refundStandaloneLabel = useAction(
+    api.shipments.actions.refundStandaloneLabel,
+  )
+  const queueShipmentLabelReprint = useMutation(
+    api.printing.mutations.queueShipmentLabelReprint,
+  )
+  const printerStation = useQuery(
+    api.printing.queries.getDefaultStationStatus,
+  ) as PrinterStationSummary | undefined
 
   const [form, setForm] = useState<StandaloneFormState>(defaultFormState)
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null)
@@ -38,8 +51,36 @@ export function StandalonePostageScreen() {
   const [refundingShipmentId, setRefundingShipmentId] = useState<
     StandaloneShipment['_id'] | null
   >(null)
+  const [queueingShipmentId, setQueueingShipmentId] = useState<
+    StandaloneShipment['_id'] | null
+  >(null)
 
   const standaloneShipments = useMemo(() => shipments ?? [], [shipments])
+  const standalonePrintJobRows = useQuery(
+    api.printing.queries.listRecentJobsForShipmentIds,
+    { shipmentIds: standaloneShipments.map((shipment) => shipment._id) },
+  ) as
+    | Array<{
+        shipmentId: StandaloneShipment['_id']
+        job: PrintJobSummary | null
+      }>
+    | undefined
+  const latestPrintJobsByShipmentId = useMemo(
+    () =>
+      new Map(
+        (standalonePrintJobRows ?? [])
+          .filter(
+            (
+              row,
+            ): row is {
+              shipmentId: StandaloneShipment['_id']
+              job: PrintJobSummary
+            } => row.job !== null,
+          )
+          .map((row) => [row.shipmentId, row.job]),
+      ),
+    [standalonePrintJobRows],
+  )
 
   function resetQuoteState() {
     setQuote(null)
@@ -101,7 +142,7 @@ export function StandalonePostageScreen() {
     setIsPurchasing(true)
 
     try {
-      const purchased = (await purchaseStandaloneLabel({
+      ;(await purchaseStandaloneLabel({
         ...buildActionInput(),
         expectedRateCents: quote.rate.rateCents,
         allowUnverifiedAddress,
@@ -109,17 +150,33 @@ export function StandalonePostageScreen() {
 
       setFlashMessage({
         kind: 'success',
-        text: `Purchased ${form.shippingMethod.toLowerCase()} postage for ${form.name || 'recipient'}.`,
+        text: `Queued ${form.shippingMethod.toLowerCase()} postage for printing for ${form.name || 'recipient'}.`,
       })
       setQuote(null)
-
-      if (typeof purchased.labelUrl === 'string') {
-        window.open(purchased.labelUrl, '_blank', 'noopener,noreferrer')
-      }
     } catch (error) {
       setQuoteError(getErrorMessage(error))
     } finally {
       setIsPurchasing(false)
+    }
+  }
+
+  async function handleQueueReprint(shipment: StandaloneShipment) {
+    setFlashMessage(null)
+    setQueueingShipmentId(shipment._id)
+
+    try {
+      await queueShipmentLabelReprint({ shipmentId: shipment._id })
+      setFlashMessage({
+        kind: 'success',
+        text: `Queued label reprint for ${extractAddress(shipment).name}.`,
+      })
+    } catch (error) {
+      setFlashMessage({
+        kind: 'error',
+        text: getErrorMessage(error),
+      })
+    } finally {
+      setQueueingShipmentId(null)
     }
   }
 
@@ -157,7 +214,11 @@ export function StandalonePostageScreen() {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,430px)_minmax(0,1fr)]">
       <section className="space-y-4">
-        <FlashBanner message={flashMessage} onDismiss={() => setFlashMessage(null)} />
+        <PrinterStationStatusCard station={printerStation ?? null} />
+        <FlashBanner
+          message={flashMessage}
+          onDismiss={() => setFlashMessage(null)}
+        />
 
         <StandalonePurchaseForm
           form={form}
@@ -175,7 +236,12 @@ export function StandalonePostageScreen() {
 
       <StandaloneShipmentList
         shipments={standaloneShipments}
+        latestPrintJobsByShipmentId={latestPrintJobsByShipmentId}
+        queueingShipmentId={queueingShipmentId}
         refundingShipmentId={refundingShipmentId}
+        onQueueReprint={(shipment) => {
+          void handleQueueReprint(shipment)
+        }}
         onRefund={(shipment) => {
           void handleRefund(shipment)
         }}

@@ -1,4 +1,4 @@
-import type { Doc } from '../../../convex/_generated/dataModel'
+import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import type { ShippingMethod } from '../../../shared/shippingMethod'
 
 export type StandaloneShipment = Doc<'shipments'> & {
@@ -46,4 +46,7 @@ export type StandaloneQuote = {
 
 export type StandalonePurchaseResult = {
   labelUrl?: string
+  printJobId: Id<'printJobs'>
+  printStatus: 'queued'
+  stationKey: string
 }

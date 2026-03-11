@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { internal } from '../../_generated/api'
 import { action } from '../../_generated/server'
+import { DEFAULT_PRINTER_STATION_KEY } from '../../../shared/printing'
 import { buyShipment } from '../sources/easypost'
 import {
   requireEnv,
@@ -18,6 +19,19 @@ import {
   formatEasyPostError,
   loadOrderContext,
 } from './shared'
+import type { Id } from '../../_generated/dataModel'
+import type { PurchasedShipment } from '../types'
+
+type PrintDispatchResult = {
+  printJobId: Id<'printJobs'>
+  printStatus: 'queued'
+  stationKey: string
+}
+
+type PurchaseActionResult = PurchasedShipment &
+  PrintDispatchResult & {
+    verificationErrors: Array<string>
+  }
 
 export const purchaseLabel = action({
   args: {
@@ -25,7 +39,10 @@ export const purchaseLabel = action({
     expectedRateCents: v.number(),
     allowUnverifiedAddress: v.boolean(),
   },
-  handler: async (ctx, { orderId, expectedRateCents, allowUnverifiedAddress }) => {
+  handler: async (
+    ctx,
+    { orderId, expectedRateCents, allowUnverifiedAddress },
+  ): Promise<PurchaseActionResult> => {
     try {
       const { order, shipments } = await loadOrderContext(ctx, orderId)
       const blockingShipment = findBlockingShipment(shipments)
@@ -61,27 +78,52 @@ export const purchaseLabel = action({
       )
       const now = Date.now()
 
-      await ctx.runMutation(internal.shipments.mutations.upsertShipment, {
-        shipment: {
-          orderId,
-          easypostShipmentId: quote.easypostShipmentId,
-          status: 'purchased',
-          addressVerified: quote.addressVerified,
-          toAddress: {
-            ...quote.verifiedAddress,
-            name: order.shippingAddress.name,
+      const shipmentId = await ctx.runMutation(
+        internal.shipments.mutations.upsertShipment,
+        {
+          shipment: {
+            orderId,
+            easypostShipmentId: quote.easypostShipmentId,
+            status: 'purchased',
+            addressVerified: quote.addressVerified,
+            toAddress: {
+              ...quote.verifiedAddress,
+              name: order.shippingAddress.name,
+            },
+            toAddressId: quote.toAddressId,
+            fromAddressId: quote.fromAddressId,
+            rates: quote.rates,
+            ...purchased,
+            createdAt: now,
+            updatedAt: now,
           },
-          toAddressId: quote.toAddressId,
-          fromAddressId: quote.fromAddressId,
-          rates: quote.rates,
-          ...purchased,
-          createdAt: now,
-          updatedAt: now,
         },
-      })
+      )
+      if (!shipmentId) {
+        throw new Error('Failed to persist the purchased shipment.')
+      }
+      const printDispatch: PrintDispatchResult = await ctx.runMutation(
+        internal.printing.mutations.enqueueJob,
+        {
+          stationKey: DEFAULT_PRINTER_STATION_KEY,
+          jobType: 'shipping_label',
+          sourceKind: 'remote_url',
+          sourceUrl: purchased.labelUrl,
+          copies: 1,
+          dedupeKey: `shipping_label:${shipmentId}:${purchased.labelUrl}`,
+          orderId,
+          shipmentId,
+          metadata: {
+            orderNumber: order.orderNumber,
+            carrier: purchased.carrier,
+            service: purchased.service,
+          },
+        },
+      )
 
       return {
         ...purchased,
+        ...printDispatch,
         verificationErrors: quote.verificationErrors,
       }
     } catch (error) {
@@ -98,7 +140,7 @@ export const purchaseStandaloneLabel = action({
     allowUnverifiedAddress: v.boolean(),
     address: standaloneAddressValidator,
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<PurchaseActionResult> => {
     try {
       const quote = await buildStandaloneQuote(args)
       if (!quote.addressVerified && !args.allowUnverifiedAddress) {
@@ -131,27 +173,50 @@ export const purchaseStandaloneLabel = action({
         args.address.name,
       )
 
-      await ctx.runMutation(internal.shipments.mutations.upsertShipment, {
-        shipment: {
-          easypostShipmentId: quote.easypostShipmentId,
-          status: 'purchased',
-          addressVerified: quote.addressVerified,
-          toAddress: {
-            ...quote.verifiedAddress,
-            name: recipientName,
+      const shipmentId = await ctx.runMutation(
+        internal.shipments.mutations.upsertShipment,
+        {
+          shipment: {
+            easypostShipmentId: quote.easypostShipmentId,
+            status: 'purchased',
+            addressVerified: quote.addressVerified,
+            toAddress: {
+              ...quote.verifiedAddress,
+              name: recipientName,
+            },
+            toAddressId: quote.toAddressId,
+            fromAddressId: quote.fromAddressId,
+            rates: quote.rates,
+            shippingMethod: args.shippingMethod,
+            ...purchased,
+            createdAt: now,
+            updatedAt: now,
           },
-          toAddressId: quote.toAddressId,
-          fromAddressId: quote.fromAddressId,
-          rates: quote.rates,
-          shippingMethod: args.shippingMethod,
-          ...purchased,
-          createdAt: now,
-          updatedAt: now,
         },
-      })
+      )
+      if (!shipmentId) {
+        throw new Error('Failed to persist the purchased shipment.')
+      }
+      const printDispatch: PrintDispatchResult = await ctx.runMutation(
+        internal.printing.mutations.enqueueJob,
+        {
+          stationKey: DEFAULT_PRINTER_STATION_KEY,
+          jobType: 'shipping_label',
+          sourceKind: 'remote_url',
+          sourceUrl: purchased.labelUrl,
+          copies: 1,
+          dedupeKey: `shipping_label:${shipmentId}:${purchased.labelUrl}`,
+          shipmentId,
+          metadata: {
+            carrier: purchased.carrier,
+            service: purchased.service,
+          },
+        },
+      )
 
       return {
         ...purchased,
+        ...printDispatch,
         verificationErrors: quote.verificationErrors,
       }
     } catch (error) {

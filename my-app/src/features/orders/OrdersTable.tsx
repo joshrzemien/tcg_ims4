@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useAction, useQuery } from 'convex/react'
+import { useAction, useMutation, useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
 import { EMPTY_ROWS } from './constants'
 import { ManageLabelsModal } from './components/ManageLabelsModal'
@@ -7,7 +7,6 @@ import { OrderDetailModal } from './components/OrderDetailModal'
 import { OrdersDataTable } from './components/OrdersDataTable'
 import { PurchaseLabelModal } from './components/PurchaseLabelModal'
 import { StatsBar } from './components/StatsBar'
-import { downloadDocument } from './lib/documents'
 import { canRepurchaseShipment } from './lib/shipment'
 import type { FlashMessage } from '~/features/shared/components/FlashBanner'
 import type { Doc } from '../../../convex/_generated/dataModel'
@@ -20,6 +19,8 @@ import type {
   OrderRow,
   OrdersPage,
   PresetFilter,
+  PrintJobSummary,
+  PrinterStationSummary,
   PurchaseQuote,
   PurchaseResult,
 } from './types'
@@ -27,10 +28,13 @@ import { humanizeToken as humanize } from '~/features/shared/lib/text'
 import { getErrorMessage } from '~/features/shared/lib/errors'
 import { LoadingTable } from '~/features/shared/components/LoadingState'
 import { FlashBanner } from '~/features/shared/components/FlashBanner'
+import { PrinterStationStatusCard } from '~/features/shared/components/PrinterStationStatusCard'
 
 export function OrdersTable() {
   const [activeFilter, setActiveFilter] = useState<PresetFilter>('unfulfilled')
-  const [filterReferenceTime, setFilterReferenceTime] = useState(() => Date.now())
+  const [filterReferenceTime, setFilterReferenceTime] = useState(() =>
+    Date.now(),
+  )
   const [pageSize, setPageSize] = useState(20)
   const [pageIndex, setPageIndex] = useState(0)
   const [pageCursors, setPageCursors] = useState<Array<string | null>>([null])
@@ -49,6 +53,9 @@ export function OrdersTable() {
   const [managedOrder, setManagedOrder] = useState<OrderRow | null>(null)
   const [refundError, setRefundError] = useState<string | null>(null)
   const [refundingShipmentId, setRefundingShipmentId] = useState<
+    Doc<'shipments'>['_id'] | null
+  >(null)
+  const [queueingShipmentId, setQueueingShipmentId] = useState<
     Doc<'shipments'>['_id'] | null
   >(null)
 
@@ -83,7 +90,12 @@ export function OrdersTable() {
   const previewPurchase = useAction(api.shipments.actions.previewPurchase)
   const purchaseLabel = useAction(api.shipments.actions.purchaseLabel)
   const refundLabel = useAction(api.shipments.actions.refundLabel)
-  const setFulfillmentStatus = useAction(api.shipments.actions.setFulfillmentStatus)
+  const setFulfillmentStatus = useAction(
+    api.shipments.actions.setFulfillmentStatus,
+  )
+  const queueShipmentLabelReprint = useMutation(
+    api.printing.mutations.queueShipmentLabelReprint,
+  )
 
   const rows = ordersPage?.page ?? EMPTY_ROWS
   const isOrdersPageLoading = ordersPage === undefined
@@ -91,10 +103,10 @@ export function OrdersTable() {
   const nextPageCursor = ordersPage?.continueCursor ?? null
 
   const currentManagedOrder = managedOrder
-    ? rows.find((order) => order._id === managedOrder._id) ?? managedOrder
+    ? (rows.find((order) => order._id === managedOrder._id) ?? managedOrder)
     : null
   const currentDetailOrder = detailOrder
-    ? rows.find((order) => order._id === detailOrder._id) ?? detailOrder
+    ? (rows.find((order) => order._id === detailOrder._id) ?? detailOrder)
     : null
 
   const orderPickContext = useQuery(
@@ -105,6 +117,21 @@ export function OrdersTable() {
     api.shipments.queries.getByOrderId,
     currentManagedOrder ? { orderId: currentManagedOrder._id } : 'skip',
   )
+  const printerStation = useQuery(
+    api.printing.queries.getDefaultStationStatus,
+  ) as PrinterStationSummary | undefined
+  const managedPrintJobRows = useQuery(
+    api.printing.queries.listRecentJobsForShipmentIds,
+    currentManagedOrder
+      ? {
+          shipmentIds: (managedOrderShipments ?? []).map(
+            (shipment) => shipment._id,
+          ),
+        }
+      : 'skip',
+  ) as
+    | Array<{ shipmentId: ManagedShipment['_id']; job: PrintJobSummary | null }>
+    | undefined
 
   const sortedManagedShipments = useMemo(
     () =>
@@ -115,6 +142,22 @@ export function OrdersTable() {
         return right.updatedAt - left.updatedAt
       }),
     [managedOrderShipments],
+  )
+  const latestManagedPrintJobsByShipmentId = useMemo(
+    () =>
+      new Map(
+        (managedPrintJobRows ?? [])
+          .filter(
+            (
+              row,
+            ): row is {
+              shipmentId: ManagedShipment['_id']
+              job: PrintJobSummary
+            } => row.job !== null,
+          )
+          .map((row) => [row.shipmentId, row.job]),
+      ),
+    [managedPrintJobRows],
   )
 
   const selectedOrders = useMemo(
@@ -128,7 +171,9 @@ export function OrdersTable() {
   const selectedNonTcgplayerCount = selectedCount - selectedTcgplayerCount
   const visibleRangeStart = rows.length === 0 ? 0 : pageIndex * pageSize + 1
   const visibleRangeEnd = pageIndex * pageSize + rows.length
-  const canRepurchaseManaged = canRepurchaseShipment(currentManagedOrder?.activeShipment)
+  const canRepurchaseManaged = canRepurchaseShipment(
+    currentManagedOrder?.activeShipment,
+  )
 
   function resetPageWindow(nextFilter?: PresetFilter) {
     setRowSelection({})
@@ -187,6 +232,7 @@ export function OrdersTable() {
     setManagedOrder(null)
     setRefundError(null)
     setRefundingShipmentId(null)
+    setQueueingShipmentId(null)
   }
 
   function closeDetailModal() {
@@ -202,7 +248,7 @@ export function OrdersTable() {
     setPurchaseError(null)
 
     try {
-      const purchased = (await purchaseLabel({
+      ;(await purchaseLabel({
         orderId: purchaseOrder._id,
         expectedRateCents: purchaseQuote.rate.rateCents,
         allowUnverifiedAddress,
@@ -210,13 +256,9 @@ export function OrdersTable() {
 
       setFlashMessage({
         kind: 'success',
-        text: `Purchased ${purchaseQuote.rate.carrier} ${purchaseQuote.rate.service} for ${purchaseOrder.orderNumber}.`,
+        text: `Label queued for printing for ${purchaseOrder.orderNumber}.`,
       })
       closePurchaseModal()
-
-      if (typeof purchased.labelUrl === 'string') {
-        window.open(purchased.labelUrl, '_blank', 'noopener,noreferrer')
-      }
     } catch (error) {
       setPurchaseError(getErrorMessage(error))
     } finally {
@@ -258,6 +300,23 @@ export function OrdersTable() {
     await openPurchaseModal(currentManagedOrder)
   }
 
+  async function handleQueueReprint(shipment: ManagedShipment) {
+    setQueueingShipmentId(shipment._id)
+    setRefundError(null)
+
+    try {
+      await queueShipmentLabelReprint({ shipmentId: shipment._id })
+      setFlashMessage({
+        kind: 'success',
+        text: `Queued label reprint for ${currentManagedOrder?.orderNumber ?? shipment.easypostShipmentId}.`,
+      })
+    } catch (error) {
+      setRefundError(getErrorMessage(error))
+    } finally {
+      setQueueingShipmentId(null)
+    }
+  }
+
   async function handleMarkFulfilled() {
     if (selectedCount === 0) {
       return
@@ -296,7 +355,8 @@ export function OrdersTable() {
       return
     }
 
-    const action = exportKind === 'pull sheets' ? exportPullSheets : exportPackingSlips
+    const action =
+      exportKind === 'pull sheets' ? exportPullSheets : exportPackingSlips
     const setLoading =
       exportKind === 'pull sheets'
         ? setIsExportingPullSheets
@@ -311,10 +371,9 @@ export function OrdersTable() {
         timezoneOffset: getTimezoneOffsetHours(),
       })) as ExportDocumentResult
 
-      downloadDocument(result)
       setFlashMessage({
         kind: 'success',
-        text: `Exported ${exportKind} for ${result.orderCount} TCGplayer order${result.orderCount === 1 ? '' : 's'}.`,
+        text: `Queued ${exportKind} for printing for ${result.orderCount} TCGplayer order${result.orderCount === 1 ? '' : 's'}.`,
       })
     } catch (error) {
       setFlashMessage({ kind: 'error', text: getErrorMessage(error) })
@@ -330,7 +389,11 @@ export function OrdersTable() {
   return (
     <>
       <StatsBar orders={rows} />
-      <FlashBanner message={flashMessage} onDismiss={() => setFlashMessage(null)} />
+      <PrinterStationStatusCard station={printerStation ?? null} />
+      <FlashBanner
+        message={flashMessage}
+        onDismiss={() => setFlashMessage(null)}
+      />
 
       <OrdersDataTable
         rows={rows}
@@ -350,8 +413,12 @@ export function OrdersTable() {
         selectedNonTcgplayerCount={selectedNonTcgplayerCount}
         onChangeFilter={resetPageWindow}
         setRowSelection={setRowSelection}
-        onExportPullSheets={() => void handleExportSelectedDocuments('pull sheets')}
-        onExportPackingSlips={() => void handleExportSelectedDocuments('packing slips')}
+        onExportPullSheets={() =>
+          void handleExportSelectedDocuments('pull sheets')
+        }
+        onExportPackingSlips={() =>
+          void handleExportSelectedDocuments('packing slips')
+        }
         onMarkFulfilled={() => void handleMarkFulfilled()}
         onOpenDetail={openDetailModal}
         onOpenManage={openManageModal}
@@ -409,10 +476,16 @@ export function OrdersTable() {
         <ManageLabelsModal
           order={currentManagedOrder}
           shipments={sortedManagedShipments}
+          latestPrintJobsByShipmentId={latestManagedPrintJobsByShipmentId}
+          queueingShipmentId={queueingShipmentId}
           refundError={refundError}
           refundingShipmentId={refundingShipmentId}
           canRepurchase={canRepurchaseManaged}
+          printerStation={printerStation ?? null}
           onClose={closeManageModal}
+          onQueueReprint={(shipment) => {
+            void handleQueueReprint(shipment)
+          }}
           onRefund={(shipment) => {
             void handleRefund(shipment)
           }}
