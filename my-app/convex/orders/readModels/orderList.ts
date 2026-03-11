@@ -91,6 +91,7 @@ async function listOrdersByCreatedAt(
       .withIndex('by_isFulfilled_createdAt', (q: any) =>
         q.eq('isFulfilled', false),
       )
+      .filter((q) => q.neq(q.field('shippingStatus'), 'cancelled'))
       .order('desc')
       .paginate(paginationOpts)
   }
