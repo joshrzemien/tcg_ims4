@@ -1,494 +1,32 @@
 import { useCallback, useMemo, useState } from 'react'
-import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from '@tanstack/react-table'
 import { useAction, useQuery } from 'convex/react'
-import {
-  CheckCircle2,
-  DollarSign,
-  ExternalLink,
-  Package,
-  Printer,
-  RefreshCw,
-  ShoppingCart,
-  Tag,
-  Truck,
-  Undo2,
-} from 'lucide-react'
 import { api } from '../../../convex/_generated/api'
-import { isNonRefundableEasyPostLetterShipment } from '../../../shared/shippingRefund'
-import { formatShippingMethodLabel } from '../../../shared/shippingMethod'
-import {
-  formatShippingStatusLabel,
-  hasRefundedPostage,
-  normalizeShippingStatus,
-  normalizeStatusToken,
-} from '../../../shared/shippingStatus'
-import type { RowSelectionState } from '@tanstack/react-table'
-import type { ShippingMethod } from '../../../shared/shippingMethod'
-import type { ShippingStatus } from '../../../shared/shippingStatus'
+import { EMPTY_ROWS } from './constants'
+import { ManageLabelsModal } from './components/ManageLabelsModal'
+import { OrderDetailModal } from './components/OrderDetailModal'
+import { OrdersDataTable } from './components/OrdersDataTable'
+import { PurchaseLabelModal } from './components/PurchaseLabelModal'
+import { StatsBar } from './components/StatsBar'
+import { downloadDocument } from './lib/documents'
+import { canRepurchaseShipment } from './lib/shipment'
+import type { FlashMessage } from '~/features/shared/components/FlashBanner'
 import type { Doc } from '../../../convex/_generated/dataModel'
-import { Button } from '~/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '~/components/ui/table'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '~/components/ui/tooltip'
-import { DialogShell } from '~/features/shared/components/DialogShell'
-import { LoadingTable } from '~/features/shared/components/LoadingState'
-import { getErrorMessage } from '~/features/shared/lib/errors'
-import { formatCents, formatDate } from '~/features/shared/lib/formatting'
+import type { RowSelectionState } from '@tanstack/react-table'
+import type {
+  ExportDocumentResult,
+  ExportKind,
+  FulfillmentResult,
+  ManagedShipment,
+  OrderRow,
+  OrdersPage,
+  PresetFilter,
+  PurchaseQuote,
+  PurchaseResult,
+} from './types'
 import { humanizeToken as humanize } from '~/features/shared/lib/text'
-import { cn } from '~/lib/utils'
-
-type OrderRow = {
-  _id: Doc<'orders'>['_id']
-  externalId: string
-  orderNumber: string
-  channel: string
-  customerName: string
-  isFulfilled: boolean
-  shippingAddress: Doc<'orders'>['shippingAddress']
-  totalAmountCents: number
-  itemCount: number
-  createdAt: number
-  updatedAt: number
-  shippingStatus: ShippingStatus
-  shippingMethod: ShippingMethod
-  trackingPublicUrl?: string
-  shipmentCount: number
-  reviewShipmentCount: number
-  activeShipment?: {
-    _id: Doc<'shipments'>['_id']
-    easypostShipmentId: string
-    status: ShippingStatus
-    trackingNumber?: string
-    labelUrl?: string
-    refundStatus?: string
-    trackingStatus?: ShippingStatus
-    carrier?: string
-    service?: string
-    rateCents?: number
-    trackerPublicUrl?: string
-    createdAt?: number
-    updatedAt?: number
-  }
-  latestShipment?: {
-    _id: Doc<'shipments'>['_id']
-    easypostShipmentId: string
-    status: ShippingStatus
-    trackingNumber?: string
-    labelUrl?: string
-    refundStatus?: string
-    trackingStatus?: ShippingStatus
-    carrier?: string
-    service?: string
-    rateCents?: number
-    trackerPublicUrl?: string
-    createdAt?: number
-    updatedAt?: number
-  }
-}
-
-type OrdersPage = {
-  page: Array<OrderRow>
-  continueCursor: string
-  isDone: boolean
-}
-
-type ManagedShipment = Doc<'shipments'>
-type OrderPickContext = NonNullable<
-  ReturnType<typeof useQuery<typeof api.orders.queries.getPickContext>>
->
-type OrderPickItem = OrderPickContext['items'][number]
-
-type PurchaseQuote = {
-  shippingMethod: ShippingMethod
-  predefinedPackage: 'letter' | 'parcel'
-  weightOz: number
-  quantity: number
-  service: 'First' | 'GroundAdvantage'
-  addressVerified: boolean
-  verificationErrors: Array<string>
-  verifiedAddress: {
-    street1: string
-    street2?: string
-    city: string
-    state: string
-    zip: string
-    country: string
-  }
-  rate: {
-    rateId: string
-    carrier: string
-    service: string
-    rateCents: number
-    deliveryDays: number | null
-  }
-}
-
-type PurchaseResult = {
-  labelUrl?: string
-}
-
-type FulfillmentResult = {
-  warning?: string
-}
-
-type ExportDocumentResult = {
-  base64Data: string
-  fileName: string
-  mimeType: string
-  orderCount: number
-}
-
-type PresetFilter = 'all' | 'last7' | 'last30' | 'unfulfilled'
-
-type FlashMessage =
-  | {
-      kind: 'success' | 'error'
-      text: string
-    }
-  | null
-
-const columnHelper = createColumnHelper<OrderRow>()
-const EMPTY_ROWS: Array<OrderRow> = []
-
-// Muted, subtle status styles for the dense dashboard aesthetic
-const statusStyles: Record<ShippingStatus, string> = {
-  pending:
-    'border-amber-500/20 bg-amber-500/5 text-amber-400',
-  processing:
-    'border-blue-500/20 bg-blue-500/5 text-blue-400',
-  created:
-    'border-cyan-500/20 bg-cyan-500/5 text-cyan-400',
-  purchased:
-    'border-sky-500/20 bg-sky-500/5 text-sky-400',
-  pre_transit:
-    'border-blue-500/20 bg-blue-500/5 text-blue-400',
-  in_transit:
-    'border-indigo-500/20 bg-indigo-500/5 text-indigo-400',
-  out_for_delivery:
-    'border-teal-500/20 bg-teal-500/5 text-teal-400',
-  shipped:
-    'border-indigo-500/20 bg-indigo-500/5 text-indigo-400',
-  delivered:
-    'border-emerald-500/20 bg-emerald-500/5 text-emerald-400',
-  available_for_pickup:
-    'border-emerald-500/20 bg-emerald-500/5 text-emerald-400',
-  return_to_sender:
-    'border-orange-500/20 bg-orange-500/5 text-orange-400',
-  failure:
-    'border-red-500/20 bg-red-500/5 text-red-400',
-  error:
-    'border-red-500/20 bg-red-500/5 text-red-400',
-  cancelled:
-    'border-zinc-500/20 bg-zinc-500/5 text-zinc-400',
-  refunded:
-    'border-red-500/20 bg-red-500/5 text-red-400',
-  replaced:
-    'border-violet-500/20 bg-violet-500/5 text-violet-400',
-  unknown:
-    'border-slate-500/20 bg-slate-500/5 text-slate-400',
-}
-
-const fulfillmentStyles = {
-  fulfilled:
-    'border-emerald-500/20 bg-emerald-500/5 text-emerald-400',
-  unfulfilled:
-    'border-amber-500/20 bg-amber-500/5 text-amber-400',
-}
-
-const channelStyles: Record<string, string> = {
-  tcgplayer: 'border-orange-500/20 bg-orange-500/5 text-orange-400',
-  manapool: 'border-violet-500/20 bg-violet-500/5 text-violet-400',
-}
-
-const numericColumns = new Set(['itemCount', 'totalAmountCents', 'createdAt'])
-const columnWidths: Partial<Record<string, string>> = {
-  orderNumber: 'w-[9rem] min-w-[9rem]',
-  channel: 'w-[5.5rem] min-w-[5.5rem]',
-  customerName: 'w-[12rem] min-w-[12rem]',
-  shippingStatus: 'w-[9rem] min-w-[9rem]',
-  isFulfilled: 'w-[5rem] min-w-[5rem]',
-  shippingMethod: 'w-[6rem] min-w-[6rem]',
-  itemCount: 'w-[3.5rem] min-w-[3.5rem]',
-  totalAmountCents: 'w-[5.5rem] min-w-[5.5rem]',
-  createdAt: 'w-[7rem] min-w-[7rem]',
-  actions: 'w-[5.5rem] min-w-[5.5rem]',
-}
-
-function getColumnWidthClass(columnId: string) {
-  return columnWidths[columnId] ?? ''
-}
-
-function getOrderUrl(order: OrderRow) {
-  const encodedOrderNumber = encodeURIComponent(order.orderNumber)
-  if (order.channel === 'tcgplayer') {
-    return `https://sellerportal.tcgplayer.com/orders/${encodedOrderNumber}`
-  }
-  if (order.channel === 'manapool') {
-    return `https://manapool.com/seller/orders/${encodedOrderNumber}`
-  }
-  return null
-}
-
-const rowSelectionIgnoreSelector = [
-  'a',
-  'button',
-  'input',
-  'select',
-  'textarea',
-  'summary',
-  '[role="button"]',
-  '[role="link"]',
-  '[data-row-selection-ignore="true"]',
-].join(', ')
-
-function shouldIgnoreRowSelection(target: EventTarget | null) {
-  return target instanceof Element
-    ? target.closest(rowSelectionIgnoreSelector) !== null
-    : false
-}
-
-function normalizeBase64DocumentData(base64Data: string): {
-  normalizedBase64Data: string
-  mimeType?: string
-} {
-  let normalizedBase64Data = base64Data.trim()
-  let mimeType: string | undefined
-
-  const dataUrlMatch = normalizedBase64Data.match(
-    /^data:([^;,]+)?;base64,([\s\S]+)$/i,
-  )
-  if (dataUrlMatch) {
-    mimeType = dataUrlMatch[1]
-    normalizedBase64Data = dataUrlMatch[2]
-  }
-
-  normalizedBase64Data = normalizedBase64Data
-    .replace(/\s+/g, '')
-    .replaceAll('-', '+')
-    .replaceAll('_', '/')
-
-  const paddingRemainder = normalizedBase64Data.length % 4
-  if (paddingRemainder === 1) {
-    throw new Error('TCGplayer returned an invalid document encoding.')
-  }
-  if (paddingRemainder > 1) {
-    normalizedBase64Data = normalizedBase64Data.padEnd(
-      normalizedBase64Data.length + (4 - paddingRemainder),
-      '=',
-    )
-  }
-
-  if (!/^[A-Za-z0-9+/=]+$/.test(normalizedBase64Data)) {
-    throw new Error('TCGplayer returned a document in an unexpected format.')
-  }
-
-  return { normalizedBase64Data, mimeType }
-}
-
-function decodeBase64Document(base64Data: string, mimeType: string): Blob {
-  const normalized = normalizeBase64DocumentData(base64Data)
-  const binary = window.atob(normalized.normalizedBase64Data)
-  const bytes = new Uint8Array(binary.length)
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-
-  return new Blob([bytes], { type: normalized.mimeType ?? mimeType })
-}
-
-function downloadDocument(result: ExportDocumentResult) {
-  const blob = decodeBase64Document(result.base64Data, result.mimeType)
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-
-  link.href = url
-  link.download = result.fileName
-  document.body.append(link)
-  link.click()
-  link.remove()
-  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000)
-}
-
-function shipmentHasPurchasedLabel(shipment?: {
-  trackingNumber?: string
-  labelUrl?: string
-  easypostTrackerId?: string
-}) {
-  return Boolean(
-    shipment?.trackingNumber || shipment?.labelUrl || shipment?.easypostTrackerId,
-  )
-}
-
-function canRepurchaseShipment(shipment?: OrderRow['activeShipment']) {
-  return !shipment || hasRefundedPostage(shipment.refundStatus)
-}
-
-function canRefundShipment(shipment?: {
-  trackingNumber?: string
-  labelUrl?: string
-  easypostTrackerId?: string
-  refundStatus?: string
-  trackingStatus?: string
-  carrier?: string
-  service?: string
-  shippingMethod?: string
-}) {
-  return (
-    shipmentHasPurchasedLabel(shipment) &&
-    !hasRefundedPostage(shipment?.refundStatus) &&
-    normalizeShippingStatus(shipment?.trackingStatus) === 'unknown' &&
-    !isNonRefundableEasyPostLetterShipment(shipment)
-  )
-}
-
-function shipmentReviewLabel(
-  shipment: Pick<
-    ManagedShipment,
-    '_id' | 'refundStatus' | 'trackingStatus' | 'status'
-  >,
-  activeShipmentId?: ManagedShipment['_id'],
-) {
-  if (shipment._id === activeShipmentId) return 'Active'
-  if (hasRefundedPostage(shipment.refundStatus)) return 'Refunded'
-  if (
-    normalizeShippingStatus(shipment.trackingStatus ?? shipment.status) ===
-    'delivered'
-  ) {
-    return 'Delivered'
-  }
-  if (normalizeShippingStatus(shipment.trackingStatus) !== 'unknown') {
-    return 'Tracked'
-  }
-  return 'Needs Review'
-}
-
-function formatRateLabel(rate: PurchaseQuote['rate']) {
-  const deliveryDays =
-    typeof rate.deliveryDays === 'number'
-      ? `, ${rate.deliveryDays}d`
-      : ''
-
-  return `${rate.carrier} ${rate.service} · ${formatCents(rate.rateCents)}${deliveryDays}`
-}
-
-function formatRefundStatus(refundStatus?: string) {
-  if (!refundStatus) return 'Not requested'
-  return humanize(normalizeStatusToken(refundStatus))
-}
-
-function formatOrderItemMeta(item: Pick<
-  OrderPickItem,
-  'set' | 'collectorNumber' | 'conditionId' | 'finishId' | 'languageId'
->) {
-  return [
-    item.set,
-    item.collectorNumber ? `#${item.collectorNumber}` : undefined,
-    item.conditionId,
-    item.finishId,
-    item.languageId,
-  ]
-    .filter((value): value is string => typeof value === 'string' && value.length > 0)
-    .join(' · ')
-}
-
-function inventoryStatusTone(orderedQuantity: number, availableQuantity: number) {
-  if (availableQuantity >= orderedQuantity) {
-    return 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
-  }
-
-  if (availableQuantity > 0) {
-    return 'border-amber-500/20 bg-amber-500/5 text-amber-400'
-  }
-
-  return 'border-red-500/20 bg-red-500/5 text-red-400'
-}
-
-// -- Stats Bar --
-function StatsBar({ orders }: { orders: Array<OrderRow> }) {
-  // TODO: These dashboard metrics are computed from the current page only.
-  // Replace them with server-backed aggregate stats if we keep pagination.
-  const stats = useMemo(() => {
-    const totalRevenue = orders.reduce((sum, o) => sum + o.totalAmountCents, 0)
-    const totalItems = orders.reduce((sum, o) => sum + o.itemCount, 0)
-    const pendingShipments = orders.filter(
-      (o) => o.shippingStatus === 'pending' || o.shippingStatus === 'processing',
-    ).length
-    const delivered = orders.filter((o) => o.shippingStatus === 'delivered').length
-    const avgOrderValue = orders.length > 0 ? totalRevenue / orders.length : 0
-
-    return { totalRevenue, totalItems, pendingShipments, delivered, avgOrderValue }
-  }, [orders])
-
-  const cells = [
-    {
-      label: 'Visible Orders',
-      value: orders.length.toLocaleString(),
-      icon: ShoppingCart,
-    },
-    {
-      label: 'Revenue',
-      value: formatCents(stats.totalRevenue),
-      icon: DollarSign,
-    },
-    {
-      label: 'Pending Shipments',
-      value: stats.pendingShipments.toLocaleString(),
-      icon: Truck,
-    },
-    {
-      label: 'Delivered',
-      value: stats.delivered.toLocaleString(),
-      icon: Package,
-    },
-    {
-      label: 'Total Items',
-      value: stats.totalItems.toLocaleString(),
-      icon: Tag,
-    },
-    {
-      label: 'Avg Order',
-      value: formatCents(stats.avgOrderValue),
-      icon: DollarSign,
-    },
-  ]
-
-  return (
-    <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-      {cells.map((cell) => (
-        <div
-          key={cell.label}
-          className="rounded border bg-card px-3 py-2"
-        >
-          <div className="flex items-center gap-1.5">
-            <cell.icon className="size-3 text-muted-foreground" />
-            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              {cell.label}
-            </span>
-          </div>
-          <p className="mt-1 text-sm font-semibold tabular-nums text-foreground">
-            {cell.value}
-          </p>
-        </div>
-      ))}
-    </div>
-  )
-}
+import { getErrorMessage } from '~/features/shared/lib/errors'
+import { LoadingTable } from '~/features/shared/components/LoadingState'
+import { FlashBanner } from '~/features/shared/components/FlashBanner'
 
 export function OrdersTable() {
   const [activeFilter, setActiveFilter] = useState<PresetFilter>('unfulfilled')
@@ -497,37 +35,6 @@ export function OrdersTable() {
   const [pageIndex, setPageIndex] = useState(0)
   const [pageCursors, setPageCursors] = useState<Array<string | null>>([null])
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
-  const cutoffTimestamp = useMemo(() => {
-    switch (activeFilter) {
-      case 'last7':
-        return filterReferenceTime - 7 * 24 * 60 * 60 * 1000
-      case 'last30':
-        return filterReferenceTime - 30 * 24 * 60 * 60 * 1000
-      default:
-        return undefined
-    }
-  }, [activeFilter, filterReferenceTime])
-  const ordersQueryArgs = useMemo(
-    () => ({
-      filter: activeFilter,
-      ...(typeof cutoffTimestamp === 'number' ? { cutoffTimestamp } : {}),
-      paginationOpts: {
-        cursor: pageCursors[pageIndex] ?? null,
-        numItems: pageSize,
-      },
-    }),
-    [activeFilter, cutoffTimestamp, pageCursors, pageIndex, pageSize],
-  )
-  const ordersPage = useQuery(
-    api.orders.queries.listPage,
-    ordersQueryArgs,
-  ) as OrdersPage | undefined
-  const exportPullSheets = useAction(api.orders.actions.exportPullSheets)
-  const exportPackingSlips = useAction(api.orders.actions.exportPackingSlips)
-  const previewPurchase = useAction(api.shipments.actions.previewPurchase)
-  const purchaseLabel = useAction(api.shipments.actions.purchaseLabel)
-  const refundLabel = useAction(api.shipments.actions.refundLabel)
-  const setFulfillmentStatus = useAction(api.shipments.actions.setFulfillmentStatus)
   const [isFulfilling, setIsFulfilling] = useState(false)
   const [isExportingPullSheets, setIsExportingPullSheets] = useState(false)
   const [isExportingPackingSlips, setIsExportingPackingSlips] = useState(false)
@@ -544,16 +51,52 @@ export function OrdersTable() {
   const [refundingShipmentId, setRefundingShipmentId] = useState<
     Doc<'shipments'>['_id'] | null
   >(null)
+
+  const cutoffTimestamp = useMemo(() => {
+    switch (activeFilter) {
+      case 'last7':
+        return filterReferenceTime - 7 * 24 * 60 * 60 * 1000
+      case 'last30':
+        return filterReferenceTime - 30 * 24 * 60 * 60 * 1000
+      default:
+        return undefined
+    }
+  }, [activeFilter, filterReferenceTime])
+
+  const ordersQueryArgs = useMemo(
+    () => ({
+      filter: activeFilter,
+      ...(typeof cutoffTimestamp === 'number' ? { cutoffTimestamp } : {}),
+      paginationOpts: {
+        cursor: pageCursors[pageIndex] ?? null,
+        numItems: pageSize,
+      },
+    }),
+    [activeFilter, cutoffTimestamp, pageCursors, pageIndex, pageSize],
+  )
+
+  const ordersPage = useQuery(api.orders.queries.listPage, ordersQueryArgs) as
+    | OrdersPage
+    | undefined
+  const exportPullSheets = useAction(api.orders.actions.exportPullSheets)
+  const exportPackingSlips = useAction(api.orders.actions.exportPackingSlips)
+  const previewPurchase = useAction(api.shipments.actions.previewPurchase)
+  const purchaseLabel = useAction(api.shipments.actions.purchaseLabel)
+  const refundLabel = useAction(api.shipments.actions.refundLabel)
+  const setFulfillmentStatus = useAction(api.shipments.actions.setFulfillmentStatus)
+
   const rows = ordersPage?.page ?? EMPTY_ROWS
   const isOrdersPageLoading = ordersPage === undefined
   const isOnLastPage = ordersPage?.isDone ?? true
   const nextPageCursor = ordersPage?.continueCursor ?? null
+
   const currentManagedOrder = managedOrder
     ? rows.find((order) => order._id === managedOrder._id) ?? managedOrder
     : null
   const currentDetailOrder = detailOrder
     ? rows.find((order) => order._id === detailOrder._id) ?? detailOrder
     : null
+
   const orderPickContext = useQuery(
     api.orders.queries.getPickContext,
     currentDetailOrder ? { orderId: currentDetailOrder._id } : 'skip',
@@ -562,6 +105,7 @@ export function OrdersTable() {
     api.shipments.queries.getByOrderId,
     currentManagedOrder ? { orderId: currentManagedOrder._id } : 'skip',
   )
+
   const sortedManagedShipments = useMemo(
     () =>
       [...(managedOrderShipments ?? [])].sort((left, right) => {
@@ -584,6 +128,7 @@ export function OrdersTable() {
   const selectedNonTcgplayerCount = selectedCount - selectedTcgplayerCount
   const visibleRangeStart = rows.length === 0 ? 0 : pageIndex * pageSize + 1
   const visibleRangeEnd = pageIndex * pageSize + rows.length
+  const canRepurchaseManaged = canRepurchaseShipment(currentManagedOrder?.activeShipment)
 
   function resetPageWindow(nextFilter?: PresetFilter) {
     setRowSelection({})
@@ -595,25 +140,28 @@ export function OrdersTable() {
     }
   }
 
-  const openPurchaseModal = useCallback(async (order: OrderRow) => {
-    setFlashMessage(null)
-    setPurchaseOrder(order)
-    setPurchaseQuote(null)
-    setAllowUnverifiedAddress(false)
-    setPurchaseError(null)
-    setIsPreviewing(true)
+  const openPurchaseModal = useCallback(
+    async (order: OrderRow) => {
+      setFlashMessage(null)
+      setPurchaseOrder(order)
+      setPurchaseQuote(null)
+      setAllowUnverifiedAddress(false)
+      setPurchaseError(null)
+      setIsPreviewing(true)
 
-    try {
-      const quote = (await previewPurchase({
-        orderId: order._id,
-      })) as PurchaseQuote
-      setPurchaseQuote(quote)
-    } catch (error) {
-      setPurchaseError(getErrorMessage(error))
-    } finally {
-      setIsPreviewing(false)
-    }
-  }, [previewPurchase])
+      try {
+        const quote = (await previewPurchase({
+          orderId: order._id,
+        })) as PurchaseQuote
+        setPurchaseQuote(quote)
+      } catch (error) {
+        setPurchaseError(getErrorMessage(error))
+      } finally {
+        setIsPreviewing(false)
+      }
+    },
+    [previewPurchase],
+  )
 
   function closePurchaseModal() {
     setPurchaseOrder(null)
@@ -654,11 +202,11 @@ export function OrdersTable() {
     setPurchaseError(null)
 
     try {
-      const purchased = await purchaseLabel({
+      const purchased = (await purchaseLabel({
         orderId: purchaseOrder._id,
         expectedRateCents: purchaseQuote.rate.rateCents,
         allowUnverifiedAddress,
-      }) as PurchaseResult
+      })) as PurchaseResult
 
       setFlashMessage({
         kind: 'success',
@@ -690,10 +238,9 @@ export function OrdersTable() {
         easypostShipmentId: shipment.easypostShipmentId,
       })
 
-      const nextRefundStatus = refund.easypostRefundStatus
       setFlashMessage({
         kind: 'success',
-        text: `Refund ${humanize(nextRefundStatus)} for ${currentManagedOrder.orderNumber} (${shipment.easypostShipmentId}).`,
+        text: `Refund ${humanize(refund.easypostRefundStatus)} for ${currentManagedOrder.orderNumber} (${shipment.easypostShipmentId}).`,
       })
     } catch (error) {
       setRefundError(getErrorMessage(error))
@@ -712,17 +259,22 @@ export function OrdersTable() {
   }
 
   async function handleMarkFulfilled() {
-    if (selectedCount === 0) return
+    if (selectedCount === 0) {
+      return
+    }
+
     setIsFulfilling(true)
     try {
       const results = (await Promise.all(
         Object.keys(rowSelection).map((orderId) =>
-          setFulfillmentStatus({ orderId: orderId as any, fulfilled: true }),
+          setFulfillmentStatus({ orderId: orderId as never, fulfilled: true }),
         ),
       )) as Array<FulfillmentResult>
+
       const warnings = results
         .map((result) => result.warning)
         .filter((warning): warning is string => typeof warning === 'string')
+
       setFlashMessage({
         kind: 'success',
         text: `Marked ${selectedCount} order${selectedCount === 1 ? '' : 's'} as fulfilled.${warnings.length > 0 ? ` ${warnings.join(' ')}` : ''}`,
@@ -739,15 +291,12 @@ export function OrdersTable() {
     return -new Date().getTimezoneOffset() / 60
   }
 
-  async function handleExportSelectedDocuments(
-    exportKind: 'pull sheets' | 'packing slips',
-  ) {
+  async function handleExportSelectedDocuments(exportKind: ExportKind) {
     if (selectedCount === 0) {
       return
     }
 
-    const action =
-      exportKind === 'pull sheets' ? exportPullSheets : exportPackingSlips
+    const action = exportKind === 'pull sheets' ? exportPullSheets : exportPackingSlips
     const setLoading =
       exportKind === 'pull sheets'
         ? setIsExportingPullSheets
@@ -768,1134 +317,109 @@ export function OrdersTable() {
         text: `Exported ${exportKind} for ${result.orderCount} TCGplayer order${result.orderCount === 1 ? '' : 's'}.`,
       })
     } catch (error) {
-      setFlashMessage({
-        kind: 'error',
-        text: getErrorMessage(error),
-      })
+      setFlashMessage({ kind: 'error', text: getErrorMessage(error) })
     } finally {
       setLoading(false)
     }
   }
 
-  const columns = useMemo(() => [
-    columnHelper.accessor('orderNumber', {
-      header: 'Order',
-      cell: (info) => {
-        const value = info.getValue()
-        const short = value.length > 12 ? value.slice(-12) : value
-        const order = info.row.original
-        const orderUrl = getOrderUrl(info.row.original)
-        const badges =
-          order.shipmentCount > 0 ? (
-            <div className="mt-1 flex flex-wrap gap-1">
-              <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {order.shipmentCount} label{order.shipmentCount === 1 ? '' : 's'}
-              </span>
-              {order.reviewShipmentCount > 0 ? (
-                <span className="inline-flex rounded border border-amber-500/20 bg-amber-500/5 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
-                  {order.reviewShipmentCount} review
-                </span>
-              ) : null}
-            </div>
-          ) : null
-
-        return (
-          <div className="min-w-0">
-            {orderUrl ? (
-              <a
-                href={orderUrl}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="font-mono text-[11px] font-medium tracking-wide text-primary underline-offset-2 hover:underline"
-                title={`${value} (open in ${humanize(order.channel)})`}
-              >
-                {short}
-              </a>
-            ) : (
-              <span
-                className="font-mono text-[11px] font-medium tracking-wide"
-                title={value}
-              >
-                {short}
-              </span>
-            )}
-            {badges}
-          </div>
-        )
-      },
-    }),
-    columnHelper.accessor('channel', {
-      header: 'Channel',
-      cell: (info) => {
-        const channel = info.getValue()
-        return (
-          <span className={cn(
-            'inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-            channelStyles[channel] ?? 'border-zinc-500/20 bg-zinc-500/5 text-zinc-400',
-          )}>
-            {humanize(channel)}
-          </span>
-        )
-      },
-    }),
-    columnHelper.accessor('customerName', {
-      header: 'Customer',
-      cell: (info) => {
-        const value = info.getValue()
-        const isDefaulted = normalizeStatusToken(value) === 'unknown'
-        const addr = info.row.original.shippingAddress
-        return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                className={cn(
-                  'block max-w-44 cursor-default truncate text-xs font-medium',
-                  isDefaulted && 'text-amber-500/80',
-                )}
-              >
-                {value}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" align="start" className="max-w-64">
-              <p className="font-semibold">{addr.name}</p>
-              <p className="mt-1 text-muted-foreground">
-                {addr.line1}
-                {addr.line2 ? `, ${addr.line2}` : ''}
-                {addr.line3 ? `, ${addr.line3}` : ''}
-                <br />
-                {addr.city}, {addr.state} {addr.postalCode}
-                <br />
-                {addr.country}
-              </p>
-            </TooltipContent>
-          </Tooltip>
-        )
-      },
-    }),
-    columnHelper.accessor('shippingStatus', {
-      header: 'Status',
-      cell: (info) => {
-        const shippingStatus = info.getValue()
-        const trackingPublicUrl = info.row.original.trackingPublicUrl
-        const className = cn(
-          'inline-flex w-fit rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-          statusStyles[shippingStatus],
-        )
-
-        if (!trackingPublicUrl) {
-          return (
-            <span className={className}>
-              {formatShippingStatusLabel(shippingStatus)}
-            </span>
-          )
-        }
-
-        return (
-          <a
-            href={trackingPublicUrl}
-            target="_blank"
-            rel="noreferrer noopener"
-            className={cn(
-              className,
-              'cursor-pointer underline-offset-2 hover:underline',
-            )}
-            title="Open tracking details"
-          >
-            {formatShippingStatusLabel(shippingStatus)}
-          </a>
-        )
-      },
-    }),
-    columnHelper.accessor((row) => row.isFulfilled, {
-      id: 'isFulfilled',
-      header: 'Fulfil',
-      cell: (info) => (
-        <span
-          className={cn(
-            'inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-            info.getValue()
-              ? fulfillmentStyles.fulfilled
-              : fulfillmentStyles.unfulfilled,
-          )}
-        >
-          {info.getValue() ? 'yes' : 'no'}
-        </span>
-      ),
-    }),
-    columnHelper.accessor('shippingMethod', {
-      header: 'Method',
-      cell: (info) => (
-        <span className="text-xs text-muted-foreground">
-          {formatShippingMethodLabel(info.getValue())}
-        </span>
-      ),
-    }),
-    columnHelper.accessor('itemCount', {
-      header: 'Qty',
-      cell: (info) => (
-        <span className="text-xs tabular-nums">{info.getValue()}</span>
-      ),
-    }),
-    columnHelper.accessor('totalAmountCents', {
-      header: 'Total',
-      cell: (info) => (
-        <span className="text-xs font-medium tabular-nums">
-          {formatCents(info.getValue())}
-        </span>
-      ),
-    }),
-    columnHelper.accessor('createdAt', {
-      header: 'Created',
-      cell: (info) => (
-        <span
-          className="text-xs tabular-nums text-muted-foreground"
-          title={new Date(info.getValue()).toLocaleString()}
-        >
-          {formatDate(info.getValue())}
-        </span>
-      ),
-    }),
-    columnHelper.display({
-      id: 'actions',
-      header: '',
-      cell: (info) => {
-        const order = info.row.original
-        if (order.shipmentCount > 0) {
-          return (
-            <div className="flex justify-end gap-1">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={() => openDetailModal(order)}
-                  >
-                    <Package className="size-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="left">View Order / Pull</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={() => openManageModal(order)}
-                  >
-                    <Truck className="size-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="left">
-                  {order.reviewShipmentCount > 0
-                    ? `Manage Labels (${order.reviewShipmentCount} need review)`
-                    : 'Manage Labels'}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          )
-        }
-
-        return (
-          <div className="flex justify-end gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={() => openDetailModal(order)}
-                >
-                  <Package className="size-3" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="left">View Order / Pull</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={() => void openPurchaseModal(order)}
-                >
-                  <Tag className="size-3" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="left">Purchase Label</TooltipContent>
-            </Tooltip>
-          </div>
-        )
-      },
-    }),
-  ], [openDetailModal, openManageModal, openPurchaseModal])
-
-  const table = useReactTable({
-    data: rows,
-    columns,
-    getRowId: (row) => row._id,
-    getCoreRowModel: getCoreRowModel(),
-    enableRowSelection: true,
-    onRowSelectionChange: setRowSelection,
-    state: { rowSelection },
-    autoResetAll: false,
-  })
-
-  const isAllPageRowsSelected = table.getIsAllPageRowsSelected()
-  const isSomePageRowsSelected = table.getIsSomePageRowsSelected()
-
   if (!ordersPage) {
     return <LoadingTable />
   }
 
-  const canRepurchaseManaged = canRepurchaseShipment(
-    currentManagedOrder?.activeShipment,
-  )
-
   return (
     <>
-      {/* Stats bar */}
       <StatsBar orders={rows} />
+      <FlashBanner message={flashMessage} onDismiss={() => setFlashMessage(null)} />
 
-      {/* Flash message */}
-      {flashMessage ? (
-        <div
-          className={cn(
-            'mt-2 rounded border px-3 py-1.5 text-xs',
-            flashMessage.kind === 'success'
-              ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
-              : 'border-red-500/20 bg-red-500/5 text-red-400',
-          )}
-        >
-          {flashMessage.text}
-        </div>
-      ) : null}
+      <OrdersDataTable
+        rows={rows}
+        activeFilter={activeFilter}
+        rowSelection={rowSelection}
+        isFulfilling={isFulfilling}
+        isExportingPullSheets={isExportingPullSheets}
+        isExportingPackingSlips={isExportingPackingSlips}
+        isOrdersPageLoading={isOrdersPageLoading}
+        isOnLastPage={isOnLastPage}
+        pageIndex={pageIndex}
+        pageSize={pageSize}
+        visibleRangeStart={visibleRangeStart}
+        visibleRangeEnd={visibleRangeEnd}
+        selectedCount={selectedCount}
+        selectedTcgplayerCount={selectedTcgplayerCount}
+        selectedNonTcgplayerCount={selectedNonTcgplayerCount}
+        onChangeFilter={resetPageWindow}
+        setRowSelection={setRowSelection}
+        onExportPullSheets={() => void handleExportSelectedDocuments('pull sheets')}
+        onExportPackingSlips={() => void handleExportSelectedDocuments('packing slips')}
+        onMarkFulfilled={() => void handleMarkFulfilled()}
+        onOpenDetail={openDetailModal}
+        onOpenManage={openManageModal}
+        onOpenPurchase={(order) => {
+          void openPurchaseModal(order)
+        }}
+        onPrevPage={() => {
+          setRowSelection({})
+          setPageIndex((current) => Math.max(0, current - 1))
+        }}
+        onNextPage={() => {
+          if (isOrdersPageLoading || isOnLastPage || nextPageCursor === null) {
+            return
+          }
 
-      {/* Orders table */}
-      <section className="mt-2 overflow-hidden rounded border bg-card">
-        <div className="flex items-center justify-between border-b bg-muted/5 px-3 py-1.5">
-          <div className="flex items-center gap-2">
-            <h2 className="text-xs font-semibold text-foreground">
-              Orders
-            </h2>
-            {/* TODO: This is the current page size, not the full result count for the active filter. */}
-            <span className="text-[10px] tabular-nums text-muted-foreground">
-              {rows.length} shown
-            </span>
-            <span
-              className={cn(
-                'text-[10px] tabular-nums',
-                selectedCount > 0 ? 'text-primary' : 'text-muted-foreground/70',
-              )}
-            >
-              · {selectedCount} selected
-            </span>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className={cn(
-                'ml-1 gap-1 border-border/70 bg-background/80',
-                isAllPageRowsSelected
-                  ? 'border-primary/30 bg-primary/8 text-foreground hover:bg-primary/12'
-                  : isSomePageRowsSelected
-                    ? 'border-primary/20 text-foreground hover:bg-primary/8'
-                    : '',
-              )}
-              onClick={() => table.toggleAllPageRowsSelected(!isAllPageRowsSelected)}
-            >
-              <CheckCircle2 className="size-3" />
-              {isAllPageRowsSelected ? 'Deselect Page' : 'Select Page'}
-            </Button>
-          </div>
-          <div className="flex items-center gap-1">
-            {([
-              ['unfulfilled', 'Unfulfilled'],
-              ['all', 'All'],
-              ['last7', '7d'],
-              ['last30', '30d'],
-            ] as const).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                className={cn(
-                  'rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
-                  activeFilter === key
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground',
-                )}
-                onClick={() => {
-                  resetPageWindow(key)
-                }}
-              >
-                {label}
-              </button>
-            ))}
-            {selectedCount > 0 ? (
-              <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span tabIndex={0}>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        className="ml-1 gap-1"
-                        onClick={() => void handleExportSelectedDocuments('pull sheets')}
-                        disabled={
-                          isExportingPullSheets ||
-                          isExportingPackingSlips ||
-                          selectedTcgplayerCount === 0
-                        }
-                      >
-                        <Printer className="size-3" />
-                        {isExportingPullSheets ? 'Exporting...' : 'Pull Sheets'}
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {selectedNonTcgplayerCount > 0
-                      ? `Export pull sheets for ${selectedTcgplayerCount} TCGplayer order${selectedTcgplayerCount === 1 ? '' : 's'}; ${selectedNonTcgplayerCount} non-TCGplayer selection${selectedNonTcgplayerCount === 1 ? '' : 's'} will be ignored`
-                      : `Export pull sheets for ${selectedTcgplayerCount} TCGplayer order${selectedTcgplayerCount === 1 ? '' : 's'}`}
-                  </TooltipContent>
-                </Tooltip>
+          setRowSelection({})
+          setPageCursors((current) => {
+            const next = current.slice(0, pageIndex + 1)
+            next[pageIndex + 1] = nextPageCursor
+            return next
+          })
+          setPageIndex((current) => current + 1)
+        }}
+        onUpdatePageSize={(nextPageSize) => {
+          setPageSize(nextPageSize)
+          setRowSelection({})
+          setPageIndex(0)
+          setPageCursors([null])
+        }}
+      />
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span tabIndex={0}>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        className="gap-1"
-                        onClick={() => void handleExportSelectedDocuments('packing slips')}
-                        disabled={
-                          isExportingPackingSlips ||
-                          isExportingPullSheets ||
-                          selectedTcgplayerCount === 0
-                        }
-                      >
-                        <Printer className="size-3" />
-                        {isExportingPackingSlips ? 'Exporting...' : 'Packing Slips'}
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {selectedNonTcgplayerCount > 0
-                      ? `Export packing slips for ${selectedTcgplayerCount} TCGplayer order${selectedTcgplayerCount === 1 ? '' : 's'}; ${selectedNonTcgplayerCount} non-TCGplayer selection${selectedNonTcgplayerCount === 1 ? '' : 's'} will be ignored`
-                      : `Export packing slips for ${selectedTcgplayerCount} TCGplayer order${selectedTcgplayerCount === 1 ? '' : 's'}`}
-                  </TooltipContent>
-                </Tooltip>
-              </>
-            ) : null}
-            {selectedCount > 0 ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    className="ml-1 gap-1 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                    onClick={() => void handleMarkFulfilled()}
-                    disabled={isFulfilling}
-                  >
-                    <CheckCircle2 className="size-3" />
-                    {isFulfilling ? 'Updating...' : 'Mark Fulfilled'}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Mark {selectedCount} order{selectedCount === 1 ? '' : 's'} as fulfilled</TooltipContent>
-              </Tooltip>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <Table className="min-w-[1020px]">
-            <TableHeader className="sticky top-0 z-10 bg-card">
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id} className="border-border/50 hover:bg-transparent">
-                  {headerGroup.headers.map((header) => {
-                    const isNumeric = numericColumns.has(header.column.id)
-                    return (
-                      <TableHead
-                        key={header.id}
-                        className={cn(
-                          'h-7 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
-                          getColumnWidthClass(header.column.id),
-                          isNumeric && 'text-right',
-                        )}
-                      >
-                        {header.isPlaceholder ? null : (
-                          <div
-                            className={cn(
-                              'flex w-full items-center gap-1 px-1 py-0.5',
-                              isNumeric && 'justify-end',
-                            )}
-                          >
-                            <span>
-                              {flexRender(
-                                header.column.columnDef.header,
-                                header.getContext(),
-                              )}
-                            </span>
-                          </div>
-                        )}
-                      </TableHead>
-                    )
-                  })}
-                </TableRow>
-              ))}
-            </TableHeader>
-
-            <TableBody>
-              {table.getRowModel().rows.length === 0 ? (
-                <TableRow className="hover:bg-transparent">
-                  <TableCell
-                    colSpan={table.getAllColumns().length}
-                    className="px-6 py-12 text-center"
-                  >
-                    <p className="text-xs font-medium text-foreground">No orders found</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {activeFilter === 'unfulfilled'
-                        ? 'No unfulfilled orders match the current filter.'
-                        : 'Orders will appear here as soon as they are synced.'}
-                    </p>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                table.getRowModel().rows.map((row, rowIndex) => (
-                  <TableRow
-                    key={row.id}
-                    data-state={row.getIsSelected() ? 'selected' : undefined}
-                    aria-selected={row.getIsSelected()}
-                    className={cn(
-                      'border-border/30 cursor-pointer',
-                      rowIndex % 2 === 0 ? 'bg-transparent' : 'bg-muted/5',
-                      row.getIsSelected()
-                        ? 'bg-primary/6 outline outline-1 -outline-offset-1 outline-primary/25 hover:bg-primary/10'
-                        : 'hover:bg-muted/20',
-                    )}
-                    onClick={(event) => {
-                      if (shouldIgnoreRowSelection(event.target)) {
-                        return
-                      }
-
-                      row.toggleSelected()
-                    }}
-                  >
-                    {row.getVisibleCells().map((cell) => {
-                      const isNumeric = numericColumns.has(cell.column.id)
-                      return (
-                        <TableCell
-                          key={cell.id}
-                          className={cn(
-                            'px-2 py-1.5',
-                            getColumnWidthClass(cell.column.id),
-                            isNumeric && 'text-right tabular-nums',
-                          )}
-                        >
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      )
-                    })}
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        <footer className="flex items-center justify-between border-t bg-muted/5 px-3 py-1.5 text-[10px] text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <label
-              htmlFor="orders-page-size"
-              className="font-medium text-foreground"
-            >
-              Rows
-            </label>
-            <select
-              id="orders-page-size"
-              className="h-6 rounded border bg-background px-1.5 text-[10px] text-foreground"
-              value={pageSize}
-              onChange={(event) => {
-                setPageSize(Number(event.target.value))
-                setRowSelection({})
-                setPageIndex(0)
-                setPageCursors([null])
-              }}
-            >
-              {[10, 20, 50].map((pageSizeOption) => (
-                <option key={pageSizeOption} value={pageSizeOption}>
-                  {pageSizeOption}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="tabular-nums">
-              {visibleRangeStart}-{visibleRangeEnd}
-            </span>
-            <span className="tabular-nums">
-              Pg {pageIndex + 1}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              onClick={() => {
-                setRowSelection({})
-                setPageIndex((current) => Math.max(0, current - 1))
-              }}
-              disabled={pageIndex === 0}
-            >
-              Prev
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              onClick={() => {
-                if (isOrdersPageLoading || isOnLastPage || nextPageCursor === null) {
-                  return
-                }
-
-                setRowSelection({})
-                setPageCursors((current) => {
-                  const next = current.slice(0, pageIndex + 1)
-                  next[pageIndex + 1] = nextPageCursor
-                  return next
-                })
-                setPageIndex((current) => current + 1)
-              }}
-              disabled={isOrdersPageLoading || isOnLastPage}
-            >
-              Next
-            </Button>
-          </div>
-        </footer>
-      </section>
-
-      {/* Purchase Modal */}
       {purchaseOrder ? (
-        <DialogShell
-          title={`Purchase Shipping: ${purchaseOrder.orderNumber}`}
-          description="Rates are quoted live from EasyPost. Purchase is blocked if the quoted service or price changes before buy."
+        <PurchaseLabelModal
+          purchaseOrder={purchaseOrder}
+          purchaseQuote={purchaseQuote}
+          allowUnverifiedAddress={allowUnverifiedAddress}
+          purchaseError={purchaseError}
+          isPreviewing={isPreviewing}
+          isPurchasing={isPurchasing}
           onClose={closePurchaseModal}
-        >
-          <div className="space-y-3">
-            {isPreviewing ? (
-              <div className="space-y-2">
-                <div className="h-10 animate-pulse rounded bg-muted/30" />
-                <div className="h-20 animate-pulse rounded bg-muted/20" />
-                <div className="h-24 animate-pulse rounded bg-muted/15" />
-              </div>
-            ) : purchaseQuote ? (
-              <>
-                <div className="grid gap-2 rounded border bg-muted/5 p-3 md:grid-cols-4">
-                  <div>
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                      Method
-                    </p>
-                    <p className="mt-0.5 text-xs font-medium">
-                      {purchaseQuote.shippingMethod}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                      Package
-                    </p>
-                    <p className="mt-0.5 text-xs font-medium">
-                      {purchaseQuote.predefinedPackage}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                      Weight
-                    </p>
-                    <p className="mt-0.5 text-xs font-medium">
-                      {purchaseQuote.weightOz} oz
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                      Quantity
-                    </p>
-                    <p className="mt-0.5 text-xs font-medium">
-                      {purchaseQuote.quantity} cards
-                    </p>
-                  </div>
-                </div>
-
-                <div className="rounded border bg-muted/5 p-3">
-                  <p className="text-xs font-semibold text-foreground">
-                    Verified destination
-                  </p>
-                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-                    {purchaseQuote.verifiedAddress.street1}
-                    {purchaseQuote.verifiedAddress.street2
-                      ? `, ${purchaseQuote.verifiedAddress.street2}`
-                      : ''}
-                    <br />
-                    {purchaseQuote.verifiedAddress.city},{' '}
-                    {purchaseQuote.verifiedAddress.state}{' '}
-                    {purchaseQuote.verifiedAddress.zip}
-                    <br />
-                    {purchaseQuote.verifiedAddress.country}
-                  </p>
-                </div>
-
-                {!purchaseQuote.addressVerified ? (
-                  <div className="rounded border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-400">
-                    <p className="font-semibold">Address verification warning</p>
-                    <ul className="mt-1.5 list-disc space-y-0.5 pl-4">
-                      {purchaseQuote.verificationErrors.map((error) => (
-                        <li key={error}>{error}</li>
-                      ))}
-                    </ul>
-                    <label className="mt-2 flex items-start gap-2">
-                      <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        checked={allowUnverifiedAddress}
-                        onChange={(event) =>
-                          setAllowUnverifiedAddress(event.target.checked)
-                        }
-                      />
-                      <span>
-                        I have manually verified this address and approve buying
-                        postage anyway.
-                      </span>
-                    </label>
-                  </div>
-                ) : null}
-
-                <div className="rounded border bg-muted/5 p-3">
-                  <p className="text-xs font-semibold text-foreground">
-                    Selected service
-                  </p>
-                  <div className="mt-2 rounded border border-primary/30 bg-primary/5 px-3 py-2">
-                    <p className="text-xs font-medium text-foreground">
-                      {formatRateLabel(purchaseQuote.rate)}
-                    </p>
-                    <p className="mt-0.5 text-[10px] text-muted-foreground">
-                      Derived from shipping method:
-                      {' '}
-                      {purchaseQuote.shippingMethod} {'->'} {purchaseQuote.service}
-                    </p>
-                  </div>
-                </div>
-              </>
-            ) : null}
-
-            {purchaseError ? (
-              <div className="rounded border border-red-500/20 bg-red-500/5 px-3 py-1.5 text-xs text-red-400">
-                {purchaseError}
-              </div>
-            ) : null}
-
-            <div className="flex justify-end gap-2 pt-1">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={closePurchaseModal}
-                disabled={isPurchasing}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void handlePurchaseSubmit()}
-                disabled={
-                  isPreviewing ||
-                  isPurchasing ||
-                  !purchaseQuote ||
-                  (!purchaseQuote.addressVerified && !allowUnverifiedAddress)
-                }
-              >
-                {isPurchasing ? 'Purchasing...' : 'Buy Label'}
-              </Button>
-            </div>
-          </div>
-        </DialogShell>
+          onSubmit={() => void handlePurchaseSubmit()}
+          onChangeAllowUnverifiedAddress={setAllowUnverifiedAddress}
+        />
       ) : null}
 
-      {/* Order Detail Modal */}
       {currentDetailOrder ? (
-        <DialogShell
-          title={`Order: ${currentDetailOrder.orderNumber}`}
-          description="Review order contents and pull locations for each linked SKU."
+        <OrderDetailModal
+          order={currentDetailOrder}
+          orderPickContext={orderPickContext}
           onClose={closeDetailModal}
-          widthClass="max-w-5xl"
-        >
-          <div className="space-y-3">
-            <div className="grid gap-2 rounded border bg-muted/5 p-3 md:grid-cols-5">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Customer
-                </p>
-                <p className="mt-0.5 text-xs font-medium text-foreground">
-                  {currentDetailOrder.customerName}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Channel
-                </p>
-                <p className="mt-0.5 text-xs font-medium text-foreground">
-                  {humanize(currentDetailOrder.channel)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Items
-                </p>
-                <p className="mt-0.5 text-xs font-medium text-foreground">
-                  {currentDetailOrder.itemCount}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Total
-                </p>
-                <p className="mt-0.5 text-xs font-medium text-foreground">
-                  {formatCents(currentDetailOrder.totalAmountCents)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Fulfillment
-                </p>
-                <p className="mt-0.5 text-xs font-medium text-foreground">
-                  {currentDetailOrder.isFulfilled ? 'Fulfilled' : 'Unfulfilled'}
-                </p>
-              </div>
-            </div>
-
-            {orderPickContext === undefined ? (
-              <div className="space-y-2">
-                {Array.from({ length: 3 }).map((_, index) => (
-                  <div key={index} className="h-28 animate-pulse rounded border bg-muted/20" />
-                ))}
-              </div>
-            ) : orderPickContext === null ? (
-              <div className="rounded border border-dashed bg-muted/10 px-4 py-8 text-center text-sm text-muted-foreground">
-                Order not found.
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {orderPickContext.items.map((item) => {
-                  const exactSkuLinked =
-                    typeof item.catalogSkuKey === 'string' && item.catalogSkuKey.length > 0
-                  const meta = formatOrderItemMeta(item)
-
-                  return (
-                    <div key={`${item.itemIndex}-${item.name}`} className="rounded border bg-muted/5 p-3">
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0 space-y-1.5">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-semibold text-foreground">
-                              {item.name}
-                            </p>
-                            <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                              Qty {item.quantity}
-                            </span>
-                            <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                              {humanize(item.productType)}
-                            </span>
-                          </div>
-                          {meta ? (
-                            <p className="text-xs text-muted-foreground">{meta}</p>
-                          ) : null}
-                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                            <span>
-                              SKU link:{' '}
-                              <span className="font-mono text-foreground">
-                                {item.catalogSkuKey ?? 'unlinked'}
-                              </span>
-                            </span>
-                            {typeof item.tcgplayerSku === 'number' ? (
-                              <span>
-                                TCGplayer SKU:{' '}
-                                <span className="font-mono text-foreground">{item.tcgplayerSku}</span>
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-
-                        <div
-                          className={cn(
-                            'rounded border px-3 py-2 text-xs',
-                            inventoryStatusTone(item.quantity, item.inventory.availableQuantity),
-                          )}
-                        >
-                          <p className="font-semibold">
-                            Available {item.inventory.availableQuantity} / Ordered {item.quantity}
-                          </p>
-                          <p className="mt-0.5 text-[11px]">
-                            Total across all workflow states: {item.inventory.totalQuantity}
-                          </p>
-                        </div>
-                      </div>
-
-                      {!exactSkuLinked ? (
-                        <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-400">
-                          This order item is not linked to a catalog SKU yet, so exact pull locations cannot be resolved.
-                        </div>
-                      ) : item.inventory.rows.length === 0 ? (
-                        <div className="mt-3 rounded border border-dashed bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
-                          No inventory rows found for this SKU.
-                        </div>
-                      ) : (
-                        <div className="mt-3 space-y-2">
-                          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                            Pull Locations
-                          </p>
-                          {item.inventory.rows.map((row) => (
-                            <div
-                              key={row.contentId}
-                              className="grid gap-2 rounded border bg-background/70 px-3 py-2 text-xs md:grid-cols-[minmax(0,1.5fr)_auto_auto]"
-                            >
-                              <div className="min-w-0">
-                                <p className="font-mono font-medium text-foreground">
-                                  {row.location.code}
-                                </p>
-                                <p className="truncate text-muted-foreground">
-                                  {row.location.displayName ?? row.location.kind}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className={cn(
-                                    'inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-                                    row.workflowStatus === 'available'
-                                      ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-400'
-                                      : row.workflowStatus === 'processing'
-                                        ? 'border-blue-500/20 bg-blue-500/5 text-blue-400'
-                                        : 'border-amber-500/20 bg-amber-500/5 text-amber-400',
-                                  )}
-                                >
-                                  {humanize(row.workflowStatus)}
-                                </span>
-                                {row.workflowTag ? (
-                                  <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                                    {row.workflowTag}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="flex items-center justify-start md:justify-end">
-                                <span className="font-semibold tabular-nums text-foreground">
-                                  Qty {row.quantity}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        </DialogShell>
+        />
       ) : null}
 
-      {/* Manage Label Modal */}
       {currentManagedOrder ? (
-        <DialogShell
-          title={`Manage Labels: ${currentManagedOrder.orderNumber}`}
-          description="Review the full shipment history for this order, refund unused labels, or start a replacement purchase after the active label is refunded."
+        <ManageLabelsModal
+          order={currentManagedOrder}
+          shipments={sortedManagedShipments}
+          refundError={refundError}
+          refundingShipmentId={refundingShipmentId}
+          canRepurchase={canRepurchaseManaged}
           onClose={closeManageModal}
-        >
-          <div className="space-y-3">
-            <div className="grid gap-2 rounded border bg-muted/5 p-3 md:grid-cols-4">
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Active Label
-                </p>
-                <p className="mt-0.5 text-xs font-medium">
-                  {currentManagedOrder.activeShipment?.trackingNumber ??
-                    'Not available'}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Status
-                </p>
-                <p className="mt-0.5 text-xs font-medium">
-                  {formatShippingStatusLabel(currentManagedOrder.shippingStatus)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Labels
-                </p>
-                <p className="mt-0.5 text-xs font-medium">
-                  {currentManagedOrder.shipmentCount}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Need Review
-                </p>
-                <p className="mt-0.5 text-xs font-medium">
-                  {currentManagedOrder.reviewShipmentCount}
-                </p>
-              </div>
-            </div>
-
-            {refundError ? (
-              <div className="rounded border border-red-500/20 bg-red-500/5 px-3 py-1.5 text-xs text-red-400">
-                {refundError}
-              </div>
-            ) : null}
-
-            {sortedManagedShipments.length === 0 ? (
-              <div className="rounded border border-dashed bg-muted/10 px-4 py-8 text-center text-sm text-muted-foreground">
-                No shipment history for this order yet.
-              </div>
-            ) : (
-              sortedManagedShipments.map((shipment) => {
-                const shipmentStatus = normalizeShippingStatus(
-                  shipment.trackingStatus ?? shipment.status,
-                )
-                const isRefunding = refundingShipmentId === shipment._id
-                const canRefund = canRefundShipment(shipment)
-                const reviewLabel = shipmentReviewLabel(
-                  shipment,
-                  currentManagedOrder.activeShipment?._id,
-                )
-
-                return (
-                  <div
-                    key={shipment._id}
-                    className="rounded border bg-muted/5 p-3"
-                  >
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={cn(
-                              'inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-                              statusStyles[shipmentStatus],
-                            )}
-                          >
-                            {formatShippingStatusLabel(shipmentStatus)}
-                          </span>
-                          <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            {reviewLabel}
-                          </span>
-                          <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            {shipment.easypostShipmentId}
-                          </span>
-                        </div>
-
-                        <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
-                          <div>
-                            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
-                              Purchased
-                            </p>
-                            <p className="mt-0.5 text-foreground">
-                              {formatDate(shipment.createdAt)}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
-                              Tracking
-                            </p>
-                            <p className="mt-0.5 font-mono text-foreground">
-                              {shipment.trackingNumber ?? 'Not available'}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
-                              Refund
-                            </p>
-                            <p className="mt-0.5 text-foreground">
-                              {formatRefundStatus(shipment.refundStatus)}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
-                              Service
-                            </p>
-                            <p className="mt-0.5 text-foreground">
-                              {shipment.carrier && shipment.service
-                                ? `${shipment.carrier} ${shipment.service}`
-                                : 'Unknown'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex shrink-0 flex-wrap gap-1.5">
-                        {shipment.trackerPublicUrl ? (
-                          <Button type="button" variant="outline" size="sm" asChild>
-                            <a
-                              href={shipment.trackerPublicUrl}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                            >
-                              <Truck className="size-3" />
-                              Track
-                              <ExternalLink className="size-3" />
-                            </a>
-                          </Button>
-                        ) : null}
-                        {shipment.labelUrl ? (
-                          <Button type="button" variant="outline" size="sm" asChild>
-                            <a
-                              href={shipment.labelUrl}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                            >
-                              <Printer className="size-3" />
-                              Reprint
-                              <ExternalLink className="size-3" />
-                            </a>
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void handleRefund(shipment)}
-                          disabled={!canRefund || isRefunding}
-                        >
-                          <Undo2 className="size-3" />
-                          {isRefunding ? 'Refunding...' : 'Refund'}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })
-            )}
-
-            <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void handleRepurchaseFromManage()}
-                disabled={!canRepurchaseManaged}
-              >
-                <RefreshCw className="size-3" />
-                Repurchase Label
-              </Button>
-            </div>
-
-            {!canRepurchaseManaged ? (
-              <p className="text-[10px] text-muted-foreground">
-                Repurchase stays locked until the active label refund is
-                submitted or completed.
-              </p>
-            ) : null}
-          </div>
-        </DialogShell>
+          onRefund={(shipment) => {
+            void handleRefund(shipment)
+          }}
+          onRepurchase={() => {
+            void handleRepurchaseFromManage()
+          }}
+        />
       ) : null}
     </>
   )
