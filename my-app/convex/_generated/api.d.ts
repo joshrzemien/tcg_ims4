@@ -62,6 +62,7 @@ import type * as inventory_writers_contentMutations from "../inventory/writers/c
 import type * as inventory_writers_events from "../inventory/writers/events.js";
 import type * as inventory_writers_importCommit from "../inventory/writers/importCommit.js";
 import type * as inventory_writers_records from "../inventory/writers/records.js";
+import type * as lib_auth from "../lib/auth.js";
 import type * as lib_collections from "../lib/collections.js";
 import type * as lib_ctx from "../lib/ctx.js";
 import type * as lib_currency from "../lib/currency.js";
@@ -187,6 +188,7 @@ declare const fullApi: ApiFromModules<{
   "inventory/writers/events": typeof inventory_writers_events;
   "inventory/writers/importCommit": typeof inventory_writers_importCommit;
   "inventory/writers/records": typeof inventory_writers_records;
+  "lib/auth": typeof lib_auth;
   "lib/collections": typeof lib_collections;
   "lib/ctx": typeof lib_ctx;
   "lib/currency": typeof lib_currency;

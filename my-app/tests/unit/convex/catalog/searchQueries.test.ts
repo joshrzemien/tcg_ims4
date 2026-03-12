@@ -6,11 +6,15 @@ import {
 } from '../../../../convex/catalog/queries'
 
 vi.mock('../../../../convex/_generated/server', () => ({
+  internalQuery: (config: unknown) => config,
   query: (config: unknown) => config,
 }))
 
 const searchCategoriesQuery = searchCategories as unknown as {
-  handler: (ctx: unknown, args: { search: string; limit?: number }) => Promise<unknown>
+  handler: (
+    ctx: unknown,
+    args: { search: string; limit?: number },
+  ) => Promise<unknown>
 }
 const searchSetsQuery = searchSets as unknown as {
   handler: (
@@ -21,20 +25,22 @@ const searchSetsQuery = searchSets as unknown as {
 
 function createDbContext() {
   const take = vi.fn()
-  const withSearchIndex = vi.fn((_indexName: string, buildQuery: (q: any) => unknown) => {
-    const searchQuery = {
-      eq: vi.fn(() => searchQuery),
-    }
-    const searchBuilder = {
-      search: vi.fn(() => searchQuery),
-    }
+  const withSearchIndex = vi.fn(
+    (_indexName: string, buildQuery: (q: any) => unknown) => {
+      const searchQuery = {
+        eq: vi.fn(() => searchQuery),
+      }
+      const searchBuilder = {
+        search: vi.fn(() => searchQuery),
+      }
 
-    buildQuery(searchBuilder)
+      buildQuery(searchBuilder)
 
-    return {
-      take,
-    }
-  })
+      return {
+        take,
+      }
+    },
+  )
 
   const query = vi.fn(() => ({
     withSearchIndex,
@@ -42,6 +48,9 @@ function createDbContext() {
 
   return {
     ctx: {
+      auth: {
+        getUserIdentity: vi.fn().mockResolvedValue({ subject: 'test-user' }),
+      },
       db: {
         query,
       },
@@ -133,25 +142,30 @@ describe('convex/catalog search queries', () => {
       },
     ])
 
-    const withSearchIndex = vi.fn((_indexName: string, buildQuery: (q: any) => unknown) => {
-      const searchQuery = {
-        eq: vi.fn((field: string, value: string) => {
-          eq(field, value)
-          return searchQuery
-        }),
-      }
-      const searchBuilder = {
-        search: vi.fn(() => searchQuery),
-      }
+    const withSearchIndex = vi.fn(
+      (_indexName: string, buildQuery: (q: any) => unknown) => {
+        const searchQuery = {
+          eq: vi.fn((field: string, value: string) => {
+            eq(field, value)
+            return searchQuery
+          }),
+        }
+        const searchBuilder = {
+          search: vi.fn(() => searchQuery),
+        }
 
-      buildQuery(searchBuilder)
+        buildQuery(searchBuilder)
 
-      return {
-        take,
-      }
-    })
+        return {
+          take,
+        }
+      },
+    )
 
     const ctx = {
+      auth: {
+        getUserIdentity: vi.fn().mockResolvedValue({ subject: 'test-user' }),
+      },
       db: {
         query: vi.fn(() => ({
           withSearchIndex,

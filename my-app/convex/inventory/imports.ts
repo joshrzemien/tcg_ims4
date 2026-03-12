@@ -3,7 +3,7 @@
 import { parse as parseCsv } from 'csv-parse/sync'
 import { v } from 'convex/values'
 import { internal } from '../_generated/api'
-import { action } from '../_generated/server'
+import { action } from '../lib/auth'
 import { chunkArray, dedupeByKey } from '../lib/collections'
 import {
   CSV_IMPORT_PREVIEW_SAMPLE_LIMIT,
@@ -125,7 +125,10 @@ async function loadCsvImportPlan(
     ...new Set(
       rows
         .map((row) => row.setCode)
-        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+        .filter(
+          (value): value is string =>
+            typeof value === 'string' && value.length > 0,
+        ),
     ),
   ]
 
@@ -211,44 +214,48 @@ async function loadCsvImportPlan(
     products: dedupeByKey(
       (
         await Promise.all([
-          ...chunkArray(catalogProductKeys, 2000).map(async (productKeysChunk) => {
-            const result: {
-              products: Array<{
-                key: string
-                setKey: string
-                tcgplayerProductId: number
-                name: string
-                cleanName: string
-              }>
-            } = await ctx.runQuery(
-              internal.inventory.importsSupport.loadCatalogProductsForImport,
-              {
-                catalogProductKeys: productKeysChunk,
-                tcgplayerProductIds: [],
-              },
-            )
+          ...chunkArray(catalogProductKeys, 2000).map(
+            async (productKeysChunk) => {
+              const result: {
+                products: Array<{
+                  key: string
+                  setKey: string
+                  tcgplayerProductId: number
+                  name: string
+                  cleanName: string
+                }>
+              } = await ctx.runQuery(
+                internal.inventory.importsSupport.loadCatalogProductsForImport,
+                {
+                  catalogProductKeys: productKeysChunk,
+                  tcgplayerProductIds: [],
+                },
+              )
 
-            return result.products
-          }),
-          ...chunkArray(tcgplayerProductIds, 2000).map(async (productIdsChunk) => {
-            const result: {
-              products: Array<{
-                key: string
-                setKey: string
-                tcgplayerProductId: number
-                name: string
-                cleanName: string
-              }>
-            } = await ctx.runQuery(
-              internal.inventory.importsSupport.loadCatalogProductsForImport,
-              {
-                catalogProductKeys: [],
-                tcgplayerProductIds: productIdsChunk,
-              },
-            )
+              return result.products
+            },
+          ),
+          ...chunkArray(tcgplayerProductIds, 2000).map(
+            async (productIdsChunk) => {
+              const result: {
+                products: Array<{
+                  key: string
+                  setKey: string
+                  tcgplayerProductId: number
+                  name: string
+                  cleanName: string
+                }>
+              } = await ctx.runQuery(
+                internal.inventory.importsSupport.loadCatalogProductsForImport,
+                {
+                  catalogProductKeys: [],
+                  tcgplayerProductIds: productIdsChunk,
+                },
+              )
 
-            return result.products
-          }),
+              return result.products
+            },
+          ),
         ])
       ).flat(),
       (product) => product.key,
@@ -329,7 +336,10 @@ export const previewCsvUpload = action({
       locationsToCreate: plan.locationsToCreate,
       setsToTrack: plan.setsToTrack,
       skippedReasonCounts: summarizeSkippedRows(plan.skippedRows),
-      skippedRowSamples: plan.skippedRows.slice(0, CSV_IMPORT_PREVIEW_SAMPLE_LIMIT),
+      skippedRowSamples: plan.skippedRows.slice(
+        0,
+        CSV_IMPORT_PREVIEW_SAMPLE_LIMIT,
+      ),
       aggregatedRowSamples: plan.aggregatedRows.slice(
         0,
         CSV_IMPORT_PREVIEW_SAMPLE_LIMIT,
@@ -364,7 +374,10 @@ export const commitCsvUpload = action({
     let importedContentRows = 0
     let receivedQuantity = 0
 
-    for (const batch of chunkArray(plan.aggregatedRows, CSV_IMPORT_WRITE_BATCH_SIZE)) {
+    for (const batch of chunkArray(
+      plan.aggregatedRows,
+      CSV_IMPORT_WRITE_BATCH_SIZE,
+    )) {
       const result: {
         appliedRows: number
         receivedQuantity: number
@@ -405,7 +418,10 @@ export const commitCsvUpload = action({
       createdRuleCount: preparation.createdRuleCount,
       reactivatedRuleCount: preparation.reactivatedRuleCount,
       skippedReasonCounts: summarizeSkippedRows(plan.skippedRows),
-      skippedRowSamples: plan.skippedRows.slice(0, CSV_IMPORT_PREVIEW_SAMPLE_LIMIT),
+      skippedRowSamples: plan.skippedRows.slice(
+        0,
+        CSV_IMPORT_PREVIEW_SAMPLE_LIMIT,
+      ),
     }
   },
 })

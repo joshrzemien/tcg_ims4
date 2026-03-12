@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query } from '../_generated/server'
+import { mutation, query } from '../lib/auth'
 import {
   buildLocationRecord,
   ensurePhysicalLocationByCode,
@@ -14,7 +14,9 @@ import {
 } from './model'
 
 function sortLocations<T extends { code: string }>(locations: Array<T>) {
-  return [...locations].sort((left, right) => left.code.localeCompare(right.code))
+  return [...locations].sort((left, right) =>
+    left.code.localeCompare(right.code),
+  )
 }
 
 export const create = mutation({
@@ -39,7 +41,9 @@ export const create = mutation({
     if (args.kind === 'physical' && !parentLocationId) {
       const parentCode = buildParentLocationCode(normalizedCode)
       if (parentCode) {
-        parentLocationId = (await ensurePhysicalLocationByCode(ctx, parentCode, false))._id
+        parentLocationId = (
+          await ensurePhysicalLocationByCode(ctx, parentCode, false)
+        )._id
       }
     }
 
@@ -142,7 +146,9 @@ export const listAssignable = query({
       .collect()
 
     return sortLocations(
-      locations.filter((location) => (args.activeOnly ?? true ? location.active : true)),
+      locations.filter((location) =>
+        (args.activeOnly ?? true) ? location.active : true,
+      ),
     )
   },
 })

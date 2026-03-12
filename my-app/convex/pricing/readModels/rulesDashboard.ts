@@ -1,4 +1,4 @@
-import { query } from '../../_generated/server'
+import { query } from '../../lib/auth'
 import { getZeroDashboardStats } from '../dashboardReadModel'
 import { categoryRuleAppliesToSet } from '../ruleScope'
 
@@ -35,11 +35,14 @@ export const listRules = query({
       const pendingSets = sets.filter(
         (set) => typeof set.pendingSyncMode === 'string',
       )
-      const pendingModes = [...new Set(pendingSets.map((set) => set.pendingSyncMode))]
+      const pendingModes = [
+        ...new Set(pendingSets.map((set) => set.pendingSyncMode)),
+      ]
 
       return {
         pricingSyncStatus: syncingSetCount > 0 ? 'syncing' : 'idle',
-        pendingSyncMode: pendingModes.length === 1 ? pendingModes[0] : undefined,
+        pendingSyncMode:
+          pendingModes.length === 1 ? pendingModes[0] : undefined,
         scopedSetCount: sets.length,
         pendingSetCount: pendingSets.length,
         syncingSetCount,
@@ -48,10 +51,7 @@ export const listRules = query({
           (sum, set) => sum + set.syncedProductCount,
           0,
         ),
-        syncedSkuCount: sets.reduce(
-          (sum, set) => sum + set.syncedSkuCount,
-          0,
-        ),
+        syncedSkuCount: sets.reduce((sum, set) => sum + set.syncedSkuCount, 0),
       }
     }
 
@@ -79,8 +79,7 @@ export const listRules = query({
           }
 
           return {
-            categoryGroupKey:
-              rule.categoryGroupKey ?? `ungrouped:${rule._id}`,
+            categoryGroupKey: rule.categoryGroupKey ?? `ungrouped:${rule._id}`,
             categoryGroupLabel: rule.categoryGroupLabel ?? 'Ungrouped',
             setGroupKey: rule.setGroupKey,
             setGroupLabel: rule.setGroupLabel,

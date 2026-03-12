@@ -1,3 +1,5 @@
+import { ClerkProvider, useAuth } from '@clerk/tanstack-react-start'
+import { ConvexProviderWithClerk } from 'convex/react-clerk'
 import {
   HeadContent,
   Outlet,
@@ -5,12 +7,14 @@ import {
   createRootRouteWithContext,
 } from '@tanstack/react-router'
 import * as React from 'react'
+import type { ConvexQueryClient } from '@convex-dev/react-query'
 import type { QueryClient } from '@tanstack/react-query'
 import { TooltipProvider } from '~/components/ui/tooltip'
-import appCss from '~/styles/app.css?url'
+import '~/styles/app.css'
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient
+  convexQueryClient: ConvexQueryClient
 }>()({
   head: () => ({
     meta: [
@@ -26,7 +30,6 @@ export const Route = createRootRouteWithContext<{
       },
     ],
     links: [
-      { rel: 'stylesheet', href: appCss },
       {
         rel: 'apple-touch-icon',
         sizes: '180x180',
@@ -61,15 +64,22 @@ function RootComponent() {
 }
 
 function RootDocument({ children }: { children: React.ReactNode }) {
+  const { convexQueryClient } = Route.useRouteContext()
+
   return (
-    <html className="dark">
+    <html lang="en" className="dark">
       <head>
         <HeadContent />
       </head>
       <body>
-        <TooltipProvider delayDuration={200}>
-          {children}
-        </TooltipProvider>
+        <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
+          <ConvexProviderWithClerk
+            client={convexQueryClient.convexClient}
+            useAuth={useAuth}
+          >
+            <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
+          </ConvexProviderWithClerk>
+        </ClerkProvider>
         <Scripts />
       </body>
     </html>

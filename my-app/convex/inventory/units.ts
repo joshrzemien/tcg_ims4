@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query } from '../_generated/server'
+import { mutation, query } from '../lib/auth'
 import {
   buildGradedContentIdentityKey,
   buildUnitIdentityKey,
@@ -27,7 +27,9 @@ export const upsertGradedDetail = mutation({
       throw new Error('Unit details can only be attached to graded inventory')
     }
     if (content.quantity !== 1) {
-      throw new Error('Graded inventory detail requires a quantity-1 content row')
+      throw new Error(
+        'Graded inventory detail requires a quantity-1 content row',
+      )
     }
 
     const unitIdentityKey = buildUnitIdentityKey({

@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { api, internal } from '../../_generated/api'
+import { internal } from '../../_generated/api'
 import { internalAction } from '../../_generated/server'
 import { chunkArray } from '../../lib/collections'
 import { filterSetPayloadToSyncScope } from '../syncPolicy'
@@ -33,7 +33,9 @@ type RequestSetSyncResult = {
 }
 
 async function loadSetByKey(ctx: ActionCtx, setKey: string) {
-  const set = await ctx.runQuery(api.catalog.queries.getSetByKey, { setKey })
+  const set = await ctx.runQuery(internal.catalog.queries.getSetByKeyInternal, {
+    setKey,
+  })
   if (!set) {
     throw new Error(`Catalog set not found: ${setKey}`)
   }

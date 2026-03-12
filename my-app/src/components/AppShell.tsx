@@ -1,6 +1,13 @@
+import {
+  Show,
+  SignInButton,
+  SignUpButton,
+  UserButton,
+} from '@clerk/tanstack-react-start'
 import { Link } from '@tanstack/react-router'
 import { Archive, DollarSign, Package, Stamp } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { buttonVariants } from '~/components/ui/button'
 import { cn } from '~/lib/utils'
 
 type NavKey = 'dashboard' | 'postage' | 'pricing' | 'inventory'
@@ -62,6 +69,31 @@ export function AppShell({
                 {item.label}
               </Link>
             ))}
+            <div className="ml-1 flex items-center gap-2 border-l border-border pl-3">
+              <Show when="signed-in">
+                <UserButton />
+              </Show>
+              <Show when="signed-out">
+                <SignInButton fallbackRedirectUrl="/">
+                  <button
+                    className={cn(
+                      buttonVariants({ variant: 'outline', size: 'sm' }),
+                    )}
+                    type="button"
+                  >
+                    Sign in
+                  </button>
+                </SignInButton>
+                <SignUpButton fallbackRedirectUrl="/">
+                  <button
+                    className={cn(buttonVariants({ size: 'sm' }))}
+                    type="button"
+                  >
+                    Sign up
+                  </button>
+                </SignUpButton>
+              </Show>
+            </div>
           </nav>
         </div>
       </header>

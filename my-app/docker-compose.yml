@@ -4,9 +4,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        VITE_CONVEX_URL: ${VITE_CONVEX_URL}
-        VITE_CONVEX_SITE_URL: ${VITE_CONVEX_SITE_URL}
+    env_file:
+      - .env.local
+      - docker-compose.env
     ports:
-      - "3000:3000"
+      - "3069:3000"
     restart: unless-stopped

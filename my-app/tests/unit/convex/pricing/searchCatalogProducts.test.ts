@@ -66,17 +66,19 @@ describe('convex/pricing searchCatalogProducts', () => {
       },
     ])
 
-    const withIndex = vi.fn((_indexName: string, buildQuery: (q: any) => unknown) => {
-      const indexQuery = {}
-      const indexBuilder = {
-        eq: vi.fn(() => indexQuery),
-      }
-      buildQuery(indexBuilder)
+    const withIndex = vi.fn(
+      (_indexName: string, buildQuery: (q: any) => unknown) => {
+        const indexQuery = {}
+        const indexBuilder = {
+          eq: vi.fn(() => indexQuery),
+        }
+        buildQuery(indexBuilder)
 
-      return {
-        collect,
-      }
-    })
+        return {
+          collect,
+        }
+      },
+    )
 
     const withSearchIndex = vi.fn(
       (_indexName: string, buildQuery: (q: any) => unknown) => {
@@ -95,6 +97,9 @@ describe('convex/pricing searchCatalogProducts', () => {
     )
 
     const ctx = {
+      auth: {
+        getUserIdentity: vi.fn().mockResolvedValue({ subject: 'test-user' }),
+      },
       db: {
         query: vi.fn(() => ({
           withIndex,
@@ -134,17 +139,19 @@ describe('convex/pricing searchCatalogProducts', () => {
     ])
     const take = vi.fn().mockResolvedValue([])
 
-    const withIndex = vi.fn((_indexName: string, buildQuery: (q: any) => unknown) => {
-      const indexQuery = {}
-      const indexBuilder = {
-        eq: vi.fn(() => indexQuery),
-      }
-      buildQuery(indexBuilder)
+    const withIndex = vi.fn(
+      (_indexName: string, buildQuery: (q: any) => unknown) => {
+        const indexQuery = {}
+        const indexBuilder = {
+          eq: vi.fn(() => indexQuery),
+        }
+        buildQuery(indexBuilder)
 
-      return {
-        collect,
-      }
-    })
+        return {
+          collect,
+        }
+      },
+    )
 
     const withSearchIndex = vi.fn(
       (_indexName: string, buildQuery: (q: any) => unknown) => {
@@ -162,6 +169,9 @@ describe('convex/pricing searchCatalogProducts', () => {
     )
 
     const ctx = {
+      auth: {
+        getUserIdentity: vi.fn().mockResolvedValue({ subject: 'test-user' }),
+      },
       db: {
         query: vi.fn(() => ({
           withIndex,

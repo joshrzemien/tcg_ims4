@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query } from '../../_generated/server'
+import { mutation, query } from '../../lib/auth'
 import {
   buildCatalogContentIdentityKey,
   buildGradedContentIdentityKey,
@@ -11,8 +11,15 @@ import {
   normalizeQuantityDelta,
   normalizeWorkflowStatus,
 } from '../shared/validation'
-import { inventoryClassValidator, inventoryWorkflowStatusValidator } from '../shared/validators'
-import { loadContentById, loadContentByIdentityKey, loadUnitDetailByContentId } from '../loaders/contents'
+import {
+  inventoryClassValidator,
+  inventoryWorkflowStatusValidator,
+} from '../shared/validators'
+import {
+  loadContentById,
+  loadContentByIdentityKey,
+  loadUnitDetailByContentId,
+} from '../loaders/contents'
 import { ensureLocationAcceptsContents } from '../loaders/locations'
 import { resolveCatalogReference } from '../loaders/catalog'
 import { buildContentRecord } from '../writers/records'
@@ -137,11 +144,16 @@ export const moveQuantity = mutation({
   },
   handler: async (ctx, args) => {
     const source = await loadContentById(ctx, args.contentId)
-    const toLocation = await ensureLocationAcceptsContents(ctx, args.toLocationId)
+    const toLocation = await ensureLocationAcceptsContents(
+      ctx,
+      args.toLocationId,
+    )
     const quantity = normalizeMoveQuantity(args.quantity)
 
     if (source.locationId === toLocation._id) {
-      throw new Error('Destination location must be different from the source location')
+      throw new Error(
+        'Destination location must be different from the source location',
+      )
     }
 
     if (quantity > source.quantity) {
@@ -188,7 +200,8 @@ export const moveQuantity = mutation({
         })
       } else {
         await ctx.db.patch('inventoryLocationContents', targetContentId, {
-          contentIdentityKey: buildPendingGradedContentIdentityKey(targetContentId),
+          contentIdentityKey:
+            buildPendingGradedContentIdentityKey(targetContentId),
         })
       }
     } else {
@@ -198,7 +211,10 @@ export const moveQuantity = mutation({
         catalogProductKey: source.catalogProductKey,
         catalogSkuKey: source.catalogSkuKey,
       })
-      const existingTarget = await loadContentByIdentityKey(ctx, targetIdentityKey)
+      const existingTarget = await loadContentByIdentityKey(
+        ctx,
+        targetIdentityKey,
+      )
 
       if (existingTarget) {
         if (
@@ -367,12 +383,16 @@ export const listByLocation = query({
       ? await ctx.db
           .query('inventoryLocationContents')
           .withIndex('by_locationId_inventoryClass', (q) =>
-            q.eq('locationId', args.locationId).eq('inventoryClass', args.inventoryClass!),
+            q
+              .eq('locationId', args.locationId)
+              .eq('inventoryClass', args.inventoryClass!),
           )
           .collect()
       : await ctx.db
           .query('inventoryLocationContents')
-          .withIndex('by_locationId', (q) => q.eq('locationId', args.locationId))
+          .withIndex('by_locationId', (q) =>
+            q.eq('locationId', args.locationId),
+          )
           .collect()
 
     return await hydrateContentRows(
@@ -395,10 +415,11 @@ export const listByProduct = query({
       )
       .collect()
 
-    const filtered =
-      args.inventoryClass
-        ? contents.filter((content) => content.inventoryClass === args.inventoryClass)
-        : contents
+    const filtered = args.inventoryClass
+      ? contents.filter(
+          (content) => content.inventoryClass === args.inventoryClass,
+        )
+      : contents
 
     return await hydrateContentRows(
       ctx,
@@ -415,13 +436,16 @@ export const listBySku = query({
   handler: async (ctx, args) => {
     const contents = await ctx.db
       .query('inventoryLocationContents')
-      .withIndex('by_catalogSkuKey', (q) => q.eq('catalogSkuKey', args.catalogSkuKey))
+      .withIndex('by_catalogSkuKey', (q) =>
+        q.eq('catalogSkuKey', args.catalogSkuKey),
+      )
       .collect()
 
-    const filtered =
-      args.inventoryClass
-        ? contents.filter((content) => content.inventoryClass === args.inventoryClass)
-        : contents
+    const filtered = args.inventoryClass
+      ? contents.filter(
+          (content) => content.inventoryClass === args.inventoryClass,
+        )
+      : contents
 
     return await hydrateContentRows(
       ctx,

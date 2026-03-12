@@ -1,8 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '../components/AppShell'
 import { StandalonePostageScreen } from '../features/postage/StandalonePostageScreen'
+import { requireBackendAuth } from '~/lib/auth'
 
 export const Route = createFileRoute('/postage')({
+  beforeLoad: async ({ context }) =>
+    await requireBackendAuth(context.convexQueryClient),
   component: PostagePage,
 })
 

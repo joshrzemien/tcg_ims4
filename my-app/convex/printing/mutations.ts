@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
-import { internalMutation, mutation } from '../_generated/server'
+import { internalMutation } from '../_generated/server'
+import { mutation } from '../lib/auth'
 import {
   DEFAULT_PRINTER_STATION_KEY,
   DEFAULT_PRINTER_STATION_NAME,

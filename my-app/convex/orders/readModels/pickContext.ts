@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { query } from '../../_generated/server'
+import { query } from '../../lib/auth'
 import {
   loadInventoryContentsBySkuKeys,
   loadInventoryLocationsById,
@@ -11,7 +11,10 @@ type InventoryLocationDoc = Doc<'inventoryLocations'>
 
 export function buildInventoryRowsForOrderItem(
   contents: Array<InventoryContentDoc>,
-  locationsById: Map<InventoryContentDoc['locationId'], InventoryLocationDoc | null>,
+  locationsById: Map<
+    InventoryContentDoc['locationId'],
+    InventoryLocationDoc | null
+  >,
 ) {
   return contents
     .flatMap((content) => {
@@ -46,7 +49,8 @@ export function buildInventoryRowsForOrderItem(
             : 2
 
       return (
-        workflowRank(left.workflowStatus) - workflowRank(right.workflowStatus) ||
+        workflowRank(left.workflowStatus) -
+          workflowRank(right.workflowStatus) ||
         left.location.code.localeCompare(right.location.code) ||
         right.updatedAt - left.updatedAt
       )
@@ -63,12 +67,20 @@ export const getPickContext = query({
 
     const catalogSkuKeys = order.items
       .map((item) => item.catalogSkuKey)
-      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+      .filter(
+        (value): value is string =>
+          typeof value === 'string' && value.length > 0,
+      )
 
-    const contentsBySkuKey = await loadInventoryContentsBySkuKeys(ctx, catalogSkuKeys)
+    const contentsBySkuKey = await loadInventoryContentsBySkuKeys(
+      ctx,
+      catalogSkuKeys,
+    )
     const locationsById = await loadInventoryLocationsById(
       ctx,
-      [...contentsBySkuKey.values()].flat().map((content) => content.locationId),
+      [...contentsBySkuKey.values()]
+        .flat()
+        .map((content) => content.locationId),
     )
 
     return {
@@ -82,7 +94,8 @@ export const getPickContext = query({
       createdAt: order.createdAt,
       items: order.items.map((item, itemIndex) => {
         const inventoryRows =
-          typeof item.catalogSkuKey === 'string' && item.catalogSkuKey.length > 0
+          typeof item.catalogSkuKey === 'string' &&
+          item.catalogSkuKey.length > 0
             ? buildInventoryRowsForOrderItem(
                 contentsBySkuKey.get(item.catalogSkuKey) ?? [],
                 locationsById,
@@ -93,7 +106,10 @@ export const getPickContext = query({
           itemIndex,
           ...item,
           inventory: {
-            totalQuantity: inventoryRows.reduce((sum, row) => sum + row.quantity, 0),
+            totalQuantity: inventoryRows.reduce(
+              (sum, row) => sum + row.quantity,
+              0,
+            ),
             availableQuantity: inventoryRows.reduce(
               (sum, row) =>
                 sum + (row.workflowStatus === 'available' ? row.quantity : 0),

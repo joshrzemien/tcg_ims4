@@ -1,6 +1,6 @@
 import { v } from 'convex/values'
 import { internal } from '../../_generated/api'
-import { action } from '../../_generated/server'
+import { action } from '../../lib/auth'
 import { DEFAULT_PRINTER_STATION_KEY } from '../../../shared/printing'
 import { buyShipment } from '../sources/easypost'
 import {
