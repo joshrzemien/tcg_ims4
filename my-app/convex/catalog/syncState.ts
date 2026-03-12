@@ -30,13 +30,6 @@ export function latestSourceTimestamp(
 }
 
 export function getSyncPriority(set: Doc<'catalogSets'>): number {
-  if (
-    typeof set.syncedProductCount !== 'number' ||
-    typeof set.syncedSkuCount !== 'number'
-  ) {
-    return set.syncStatus === 'error' ? 3 : 0
-  }
-
   if (!set.lastSyncedAt) {
     return set.syncStatus === 'error' ? 3 : 0
   }
@@ -59,9 +52,8 @@ export function getSyncPriority(set: Doc<'catalogSets'>): number {
 export function needsRuleScopeCleanup(set: Doc<'catalogSets'>): boolean {
   return (
     typeof set.lastSyncedAt === 'number' ||
-    (typeof set.syncedProductCount === 'number' &&
-      set.syncedProductCount > 0) ||
-    (typeof set.syncedSkuCount === 'number' && set.syncedSkuCount > 0)
+    set.syncedProductCount > 0 ||
+    set.syncedSkuCount > 0
   )
 }
 

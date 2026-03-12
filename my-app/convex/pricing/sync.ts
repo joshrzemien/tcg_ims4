@@ -38,7 +38,7 @@ export const refreshTrackedCoverageForSet = internalAction({
     setKey: v.string(),
   },
   handler: async (ctx, { setKey }): Promise<CoverageResult> => {
-    return await ctx.runMutation(
+    return await ctx.runAction(
       internal.pricing.mutations.refreshTrackedCoverageForSetMutation,
       { setKey },
     )
@@ -51,7 +51,7 @@ export const captureSeriesSnapshotsForSet = internalAction({
     capturedAt: v.number(),
   },
   handler: async (ctx, { setKey, capturedAt }): Promise<SnapshotResult> => {
-    return await ctx.runMutation(
+    return await ctx.runAction(
       internal.pricing.mutations.captureSeriesSnapshotsForSetMutation,
       { setKey, capturedAt },
     )

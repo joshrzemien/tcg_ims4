@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '../components/AppShell'
-import { OrdersTable } from '../components/OrdersTable'
+import { OrdersTable } from '../features/orders/OrdersTable'
 
 export const Route = createFileRoute('/')({
   component: Home,

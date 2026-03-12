@@ -24,10 +24,10 @@ export interface OrderItemRecord {
   name: string;
   quantity: number;
   productId: string;
-  mtgjsonId: string;
+  mtgjsonId?: string;
   priceCents: number;
-  productType: string;
-  set: string;
+  productType: "mtg_single" | "mtg_sealed";
+  set?: string;
   conditionId?: string;
   finishId?: string;
   languageId: string;
@@ -45,7 +45,7 @@ export interface OrderRecord {
   customerName: string;
   status: ShippingStatus;
   shippingStatus: ShippingStatus;
-  fulfillmentStatus: boolean;
+  isFulfilled: boolean;
   shippingMethod: ShippingMethod;
   shippingAddress: OrderAddressRecord;
   totalAmountCents: number;

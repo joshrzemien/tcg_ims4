@@ -1,13 +1,12 @@
 import { v } from 'convex/values'
 import { query } from '../_generated/server'
-import { listRuleScopedSetKeys } from '../pricing/ruleScope'
+import { loadSyncCandidates } from './syncCandidates'
 import { getAllowedCatalogCategoryIds } from './config'
-import {
-  compareSyncCandidates,
-  getSyncPriority,
-  isSyncCandidateEligible,
-  needsRuleScopeCleanup,
-} from './syncState'
+import { getSyncPriority } from './syncState'
+
+function clampLimit(limit: number | undefined, fallback = 25, max = 100) {
+  return Math.max(1, Math.min(limit ?? fallback, max))
+}
 
 async function countDocuments(
   queryHandle: AsyncIterable<unknown>,
@@ -37,6 +36,64 @@ function incrementCount(map: Map<string, number>, key: string | undefined) {
   map.set(key, (map.get(key) ?? 0) + 1)
 }
 
+function mapCategorySummary(category: {
+  key: string
+  name: string
+  displayName: string
+  tcgtrackingCategoryId: number
+  productCount: number
+  setCount: number
+  updatedAt: number
+}) {
+  return {
+    key: category.key,
+    label: category.displayName,
+    name: category.name,
+    displayName: category.displayName,
+    tcgtrackingCategoryId: category.tcgtrackingCategoryId,
+    productCount: category.productCount,
+    setCount: category.setCount,
+    updatedAt: category.updatedAt,
+  }
+}
+
+function mapSetSummary(set: {
+  key: string
+  name: string
+  abbreviation?: string
+  categoryKey: string
+  categoryDisplayName: string
+  tcgtrackingSetId: number
+  productCount: number
+  skuCount: number
+  publishedOn?: string
+  syncStatus: string
+  pricingSyncStatus: string
+  pendingSyncMode?: string
+  syncedProductCount: number
+  syncedSkuCount: number
+  updatedAt: number
+}) {
+  return {
+    key: set.key,
+    label: `${set.categoryDisplayName} / ${set.name}`,
+    name: set.name,
+    abbreviation: set.abbreviation,
+    categoryKey: set.categoryKey,
+    categoryDisplayName: set.categoryDisplayName,
+    tcgtrackingSetId: set.tcgtrackingSetId,
+    productCount: set.productCount,
+    skuCount: set.skuCount,
+    publishedOn: set.publishedOn,
+    syncStatus: set.syncStatus,
+    pricingSyncStatus: set.pricingSyncStatus,
+    pendingSyncMode: set.pendingSyncMode,
+    syncedProductCount: set.syncedProductCount,
+    syncedSkuCount: set.syncedSkuCount,
+    updatedAt: set.updatedAt,
+  }
+}
+
 export const getSetByKey = query({
   args: {
     setKey: v.string(),
@@ -50,66 +107,110 @@ export const getSetByKey = query({
 })
 
 export const listCategories = query({
-  args: {},
-  handler: async (ctx) => {
-    const categories = await ctx.db.query('catalogCategories').collect()
+  args: {
+    search: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { search, limit }) => {
+    const normalizedSearch = search?.trim()
+    const maxResults = clampLimit(limit)
+    const categories =
+      normalizedSearch && normalizedSearch.length >= 2
+        ? await ctx.db
+            .query('catalogCategories')
+            .withSearchIndex('search_displayName', (q) =>
+              q.search('displayName', normalizedSearch),
+            )
+            .take(maxResults)
+        : await ctx.db
+            .query('catalogCategories')
+            .withIndex('by_displayName')
+            .take(maxResults)
 
-    return categories
-      .sort((left, right) => left.displayName.localeCompare(right.displayName))
-      .map((category) => ({
-        key: category.key,
-        label: category.displayName,
-        name: category.name,
-        displayName: category.displayName,
-        tcgtrackingCategoryId: category.tcgtrackingCategoryId,
-        productCount: category.productCount,
-        setCount: category.setCount,
-        updatedAt: category.updatedAt,
-      }))
+    return categories.map(mapCategorySummary)
   },
 })
 
 export const listSets = query({
   args: {
     categoryKey: v.optional(v.string()),
+    search: v.optional(v.string()),
+    limit: v.optional(v.number()),
   },
-  handler: async (ctx, { categoryKey }) => {
-    const sets = categoryKey
-      ? await ctx.db
-          .query('catalogSets')
-          .withIndex('by_categoryKey', (q) => q.eq('categoryKey', categoryKey))
-          .collect()
-      : await ctx.db.query('catalogSets').collect()
+  handler: async (ctx, { categoryKey, search, limit }) => {
+    const normalizedSearch = search?.trim()
+    const maxResults = clampLimit(limit)
+    const sets =
+      normalizedSearch && normalizedSearch.length >= 2
+        ? await ctx.db
+            .query('catalogSets')
+            .withSearchIndex('search_name', (q) => {
+              let searchQuery = q.search('name', normalizedSearch)
+              if (categoryKey) {
+                searchQuery = searchQuery.eq('categoryKey', categoryKey)
+              }
+              return searchQuery
+            })
+            .take(maxResults)
+        : categoryKey
+          ? await ctx.db
+              .query('catalogSets')
+              .withIndex('by_categoryKey_name', (q) =>
+                q.eq('categoryKey', categoryKey),
+              )
+              .take(maxResults)
+          : await ctx.db.query('catalogSets').withIndex('by_name').take(maxResults)
 
-    return sets
-      .sort((left, right) => {
-        const categoryComparison = left.categoryDisplayName.localeCompare(
-          right.categoryDisplayName,
-        )
-        if (categoryComparison !== 0) {
-          return categoryComparison
+    return sets.map(mapSetSummary)
+  },
+})
+
+export const searchCategories = query({
+  args: {
+    search: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { search, limit }) => {
+    const normalizedSearch = search.trim()
+    if (normalizedSearch.length < 2) {
+      return []
+    }
+
+    const categories = await ctx.db
+      .query('catalogCategories')
+      .withSearchIndex('search_displayName', (q) =>
+        q.search('displayName', normalizedSearch),
+      )
+      .take(clampLimit(limit))
+
+    return categories.map(mapCategorySummary)
+  },
+})
+
+export const searchSets = query({
+  args: {
+    categoryKey: v.optional(v.string()),
+    search: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { categoryKey, search, limit }) => {
+    const normalizedSearch = search.trim()
+    if (normalizedSearch.length < 2) {
+      return []
+    }
+
+    const sets = await ctx.db
+      .query('catalogSets')
+      .withSearchIndex('search_name', (q) => {
+        let searchQuery = q.search('name', normalizedSearch)
+        if (categoryKey) {
+          searchQuery = searchQuery.eq('categoryKey', categoryKey)
         }
-
-        return left.name.localeCompare(right.name)
+        return searchQuery
       })
-      .map((set) => ({
-        key: set.key,
-        label: `${set.categoryDisplayName} / ${set.name}`,
-        name: set.name,
-        abbreviation: set.abbreviation,
-        categoryKey: set.categoryKey,
-        categoryDisplayName: set.categoryDisplayName,
-        tcgtrackingSetId: set.tcgtrackingSetId,
-        productCount: set.productCount,
-        skuCount: set.skuCount,
-        publishedOn: set.publishedOn,
-        syncStatus: set.syncStatus,
-        pricingSyncStatus: set.pricingSyncStatus ?? 'idle',
-        pendingSyncMode: set.pendingSyncMode,
-        syncedProductCount: set.syncedProductCount,
-        syncedSkuCount: set.syncedSkuCount,
-        updatedAt: set.updatedAt,
-      }))
+      .take(clampLimit(limit))
+
+    return sets.map(mapSetSummary)
   },
 })
 
@@ -118,42 +219,16 @@ export const listSyncCandidates = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, { limit }) => {
-    const sets = await ctx.db.query('catalogSets').collect()
     const maxResults = Math.max(1, Math.min(limit ?? 25, 100))
     const allowedCategoryIds = getAllowedCatalogCategoryIds()
     const now = Date.now()
-    const ruleScopedSetKeys = await listRuleScopedSetKeys(ctx, { sets })
-
-    const cleanupCandidates = sets
-      .filter(
-        (set) =>
-          !ruleScopedSetKeys.has(set.key) &&
-          set.syncStatus !== 'syncing' &&
-          set.pricingSyncStatus !== 'syncing' &&
-          needsRuleScopeCleanup(set),
-      )
-      .sort(
-        (left, right) => (right.lastSyncedAt ?? 0) - (left.lastSyncedAt ?? 0),
-      )
-
-    const inScopeCandidates = sets
-      .filter((set) => ruleScopedSetKeys.has(set.key))
-      .filter((set) => isSyncCandidateEligible(set, now, allowedCategoryIds))
-      .sort(compareSyncCandidates)
-
-    const orderedCandidates = [...cleanupCandidates, ...inScopeCandidates]
-    const seenSetKeys = new Set<string>()
+    const orderedCandidates = await loadSyncCandidates(ctx, {
+      limit: maxResults,
+      allowedCategoryIds,
+      now,
+    })
 
     return orderedCandidates
-      .filter((set) => {
-        if (seenSetKeys.has(set.key)) {
-          return false
-        }
-
-        seenSetKeys.add(set.key)
-        return true
-      })
-      .slice(0, maxResults)
       .map((set) => ({
         ...set,
         syncPriority: getSyncPriority(set),
@@ -216,15 +291,15 @@ export const inspectSetFinishMapping = query({
     const pricingLabelCounts = new Map<string, number>()
     const normalizedPricingKeyCounts = new Map<string, number>()
     const variantCodeCounts = new Map<string, number>()
-    const skuVariantByProductId = new Map<number, Set<string>>()
+    const skuVariantByProductKey = new Map<string, Set<string>>()
 
     for (const sku of skus) {
       incrementCount(variantCodeCounts, sku.variantCode ?? '(missing)')
 
-      let productVariants = skuVariantByProductId.get(sku.tcgplayerProductId)
+      let productVariants = skuVariantByProductKey.get(sku.catalogProductKey)
       if (!productVariants) {
         productVariants = new Set<string>()
-        skuVariantByProductId.set(sku.tcgplayerProductId, productVariants)
+        skuVariantByProductKey.set(sku.catalogProductKey, productVariants)
       }
 
       productVariants.add(sku.variantCode ?? '(missing)')
@@ -232,7 +307,6 @@ export const inspectSetFinishMapping = query({
 
     const productSamples: Array<{
       productKey: string
-      tcgplayerProductId: number
       name: string
       number?: string
       rarity?: string
@@ -263,7 +337,7 @@ export const inspectSetFinishMapping = query({
       }
 
       const skuVariantCodes = [
-        ...(skuVariantByProductId.get(product.tcgplayerProductId) ?? new Set()),
+        ...(skuVariantByProductKey.get(product.key) ?? new Set()),
       ].sort()
 
       if (
@@ -274,7 +348,6 @@ export const inspectSetFinishMapping = query({
       ) {
         productSamples.push({
           productKey: product.key,
-          tcgplayerProductId: product.tcgplayerProductId,
           name: product.name,
           number: product.number,
           rarity: product.rarity,

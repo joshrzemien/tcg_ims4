@@ -90,15 +90,26 @@ export const getByOrderId = query({
 })
 
 export const listStandalone = query({
-  args: {},
-  handler: async (ctx) => {
-    const shipments = await ctx.db.query('shipments').collect()
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { limit }) => {
     const recentOrderWithoutTrackingCutoff =
       Date.now() - RECENT_ORDER_WITHOUT_TRACKING_WINDOW_MS
+    const maxResults = Math.max(1, Math.min(limit ?? 100, 250))
+    const shipments = await ctx.db
+      .query('shipments')
+      .withIndex('by_orderId_status_createdAt', (q) =>
+        q.eq('orderId', undefined).eq('status', 'purchased').gte(
+          'createdAt',
+          recentOrderWithoutTrackingCutoff,
+        ),
+      )
+      .order('desc')
+      .take(maxResults)
 
     const standaloneShipments = shipments.filter(
       (shipment) =>
-        shipment.orderId == null &&
         isRecentPurchasedShipmentWithoutTrackingUpdate(
           shipment,
           recentOrderWithoutTrackingCutoff,

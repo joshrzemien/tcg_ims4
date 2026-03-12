@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.gitignore
+.DS_Store
+.cache
+.tanstack
+.output
+coverage
+test-results
+playwright-report
+.env
+.env.local
+.env.sentry-build-plugin
+docker-compose.env

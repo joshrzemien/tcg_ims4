@@ -172,15 +172,6 @@ export function buildOrderShipmentState(params: {
   }
 }
 
-export function hasMaterializedOrderShipmentState(
-  order: OrderSummarySource,
-): boolean {
-  return (
-    typeof order.shipmentCount === 'number' &&
-    typeof order.reviewShipmentCount === 'number'
-  )
-}
-
 export function readMaterializedOrderShipmentState(
   order: OrderSummarySource,
 ): OrderShipmentState {

@@ -34,6 +34,61 @@ const pricingSyncStatusValidator = v.union(
   v.literal('error'),
 )
 
+const orderChannelValidator = v.union(
+  v.literal('manapool'),
+  v.literal('tcgplayer'),
+  v.literal('seeded'),
+)
+
+const shippingMethodValidator = v.union(
+  v.literal('Letter'),
+  v.literal('Parcel'),
+)
+
+const shipmentRefundStatusValidator = v.union(
+  v.literal('submitted'),
+  v.literal('refunded'),
+  v.literal('rejected'),
+  v.literal('not_applicable'),
+  v.literal('unknown'),
+)
+
+const orderItemProductTypeValidator = v.union(
+  v.literal('mtg_single'),
+  v.literal('mtg_sealed'),
+)
+
+const inventoryClassValidator = v.union(
+  v.literal('single'),
+  v.literal('sealed'),
+  v.literal('graded'),
+)
+
+const inventoryLocationKindValidator = v.union(
+  v.literal('physical'),
+  v.literal('system'),
+)
+
+const inventoryReferenceKindValidator = v.literal('catalog')
+
+const inventoryWorkflowStatusValidator = v.union(
+  v.literal('available'),
+  v.literal('processing'),
+  v.literal('hold'),
+)
+
+const inventoryUnitKindValidator = v.literal('graded_card')
+
+const inventoryEventTypeValidator = v.union(
+  v.literal('migration_seed'),
+  v.literal('receive'),
+  v.literal('adjust'),
+  v.literal('move'),
+  v.literal('status_change'),
+  v.literal('unit_detail_upserted'),
+  v.literal('content_deleted'),
+)
+
 const setSyncModeValidator = v.union(
   v.literal('full'),
   v.literal('pricing_only'),
@@ -58,13 +113,56 @@ const pricingResolutionIssueTypeValidator = v.union(
   v.literal('missing_manapool_match'),
   v.literal('sync_error'),
 )
+
+const printerStationStatusValidator = v.union(
+  v.literal('online'),
+  v.literal('offline'),
+  v.literal('unknown'),
+)
+
+const printJobTypeValidator = v.union(
+  v.literal('shipping_label'),
+  v.literal('packing_slip'),
+  v.literal('pull_sheet'),
+  v.literal('ad_hoc_document'),
+)
+
+const printJobStatusValidator = v.union(
+  v.literal('queued'),
+  v.literal('claimed'),
+  v.literal('printing'),
+  v.literal('printed'),
+  v.literal('failed'),
+  v.literal('cancelled'),
+)
+
+const printSourceKindValidator = v.union(
+  v.literal('remote_url'),
+  v.literal('stored_document'),
+)
+
+const easypostAddressSnapshotValidator = v.object({
+  id: v.optional(v.string()),
+  name: v.optional(v.string()),
+  company: v.optional(v.string()),
+  street1: v.optional(v.string()),
+  street2: v.optional(v.string()),
+  city: v.optional(v.string()),
+  state: v.optional(v.string()),
+  zip: v.optional(v.string()),
+  country: v.optional(v.string()),
+  phone: v.optional(v.string()),
+  email: v.optional(v.string()),
+  residential: v.optional(v.union(v.boolean(), v.string())),
+})
+
 const shipmentSummaryValidator = v.object({
   _id: v.id('shipments'),
   easypostShipmentId: v.string(),
   status: shippingStatusValidator,
   trackingNumber: v.optional(v.string()),
   labelUrl: v.optional(v.string()),
-  refundStatus: v.optional(v.string()),
+  refundStatus: v.optional(shipmentRefundStatusValidator),
   trackingStatus: v.optional(shippingStatusValidator),
   carrier: v.optional(v.string()),
   service: v.optional(v.string()),
@@ -86,21 +184,21 @@ export default defineSchema({
     displayName: v.string(),
     productCount: v.number(),
     setCount: v.number(),
-    apiUrl: v.string(),
     updatedAt: v.number(),
   })
     .index('by_key', ['key'])
-    .index('by_tcgtrackingCategoryId', ['tcgtrackingCategoryId']),
+    .index('by_displayName', ['displayName'])
+    .searchIndex('search_displayName', {
+      searchField: 'displayName',
+    }),
   catalogSets: defineTable({
     key: v.string(),
     categoryKey: v.string(),
     tcgtrackingCategoryId: v.number(),
-    categoryName: v.string(),
     categoryDisplayName: v.string(),
     tcgtrackingSetId: v.number(),
     name: v.string(),
     abbreviation: v.optional(v.string()),
-    isSupplemental: v.optional(v.boolean()),
     publishedOn: v.optional(v.string()),
     modifiedOn: v.optional(v.string()),
     productCount: v.number(),
@@ -114,17 +212,48 @@ export default defineSchema({
     lastSyncError: v.optional(v.string()),
     nextSyncAttemptAt: v.optional(v.number()),
     consecutiveSyncFailures: v.optional(v.number()),
-    syncedProductCount: v.optional(v.number()),
-    syncedSkuCount: v.optional(v.number()),
-    pricingSyncStatus: v.optional(pricingSyncStatusValidator),
+    syncedProductCount: v.number(),
+    syncedSkuCount: v.number(),
+    pricingSyncStatus: pricingSyncStatusValidator,
     currentPricingSyncStartedAt: v.optional(v.number()),
-    lastPricingSyncedAt: v.optional(v.number()),
     lastPricingSyncError: v.optional(v.string()),
     pendingSyncMode: v.optional(setSyncModeValidator),
+    inRuleScope: v.boolean(),
+    hasCompletedSync: v.boolean(),
+    latestSourceUpdatedAt: v.optional(v.number()),
+    hasSourceChanges: v.boolean(),
+    activeTrackedSeriesCount: v.number(),
+    hasActiveTrackedSeries: v.boolean(),
     updatedAt: v.number(),
   })
     .index('by_key', ['key'])
-    .index('by_categoryKey', ['categoryKey']),
+    .index('by_categoryKey', ['categoryKey'])
+    .index('by_name', ['name'])
+    .index('by_abbreviation', ['abbreviation'])
+    .index('by_categoryKey_name', ['categoryKey', 'name'])
+    .index('by_inRuleScope_isSynced_lastSyncedAt', [
+      'inRuleScope',
+      'hasCompletedSync',
+      'lastSyncedAt',
+    ])
+    .index('by_inRuleScope_hasSourceChanges_latestSourceUpdatedAt', [
+      'inRuleScope',
+      'hasSourceChanges',
+      'latestSourceUpdatedAt',
+    ])
+    .index('by_inRuleScope_syncStatus_nextSyncAttemptAt', [
+      'inRuleScope',
+      'syncStatus',
+      'nextSyncAttemptAt',
+    ])
+    .index('by_hasActiveTrackedSeries_lastSyncedAt', [
+      'hasActiveTrackedSeries',
+      'lastSyncedAt',
+    ])
+    .searchIndex('search_name', {
+      searchField: 'name',
+      filterFields: ['categoryKey'],
+    }),
   catalogProducts: defineTable({
     key: v.string(),
     categoryKey: v.string(),
@@ -132,34 +261,22 @@ export default defineSchema({
     tcgtrackingCategoryId: v.number(),
     tcgtrackingSetId: v.number(),
     tcgplayerProductId: v.number(),
+    tcgplayerUrl: v.optional(v.string()),
     name: v.string(),
     cleanName: v.string(),
     number: v.optional(v.string()),
     rarity: v.optional(v.string()),
-    imageUrl: v.optional(v.string()),
-    imageCount: v.optional(v.number()),
-    tcgplayerUrl: v.optional(v.string()),
-    manapoolUrl: v.optional(v.string()),
-    scryfallId: v.optional(v.string()),
-    mtgjsonUuid: v.optional(v.string()),
-    cardmarketId: v.optional(v.number()),
-    cardtraderId: v.optional(v.number()),
-    cardtrader: v.optional(v.any()),
-    colors: v.optional(v.array(v.string())),
-    colorIdentity: v.optional(v.array(v.string())),
-    manaValue: v.optional(v.number()),
     finishes: v.optional(v.array(v.string())),
-    borderColor: v.optional(v.string()),
     tcgplayerPricing: v.optional(v.any()),
     manapoolPricing: v.optional(v.any()),
     manapoolQuantity: v.optional(v.number()),
-    sourceDataModifiedAt: v.optional(v.number()),
     pricingUpdatedAt: v.optional(v.number()),
     skuPricingUpdatedAt: v.optional(v.number()),
     lastIngestedAt: v.number(),
     updatedAt: v.number(),
   })
     .index('by_key', ['key'])
+    .index('by_cleanName', ['cleanName'])
     .index('by_tcgplayerProductId', ['tcgplayerProductId'])
     .index('by_setKey', ['setKey'])
     .index('by_setKey_lastIngestedAt', ['setKey', 'lastIngestedAt'])
@@ -172,9 +289,6 @@ export default defineSchema({
     catalogProductKey: v.string(),
     categoryKey: v.string(),
     setKey: v.string(),
-    tcgtrackingCategoryId: v.number(),
-    tcgtrackingSetId: v.number(),
-    tcgplayerProductId: v.number(),
     tcgplayerSku: v.number(),
     conditionCode: v.optional(v.string()),
     variantCode: v.optional(v.string()),
@@ -189,7 +303,6 @@ export default defineSchema({
   })
     .index('by_key', ['key'])
     .index('by_tcgplayerSku', ['tcgplayerSku'])
-    .index('by_catalogProductKey', ['catalogProductKey'])
     .index('by_setKey', ['setKey'])
     .index('by_setKey_lastIngestedAt', ['setKey', 'lastIngestedAt']),
   pricingTrackingRules: defineTable({
@@ -204,29 +317,24 @@ export default defineSchema({
     categoryGroupLabel: v.optional(v.string()),
     setGroupKey: v.optional(v.string()),
     setGroupLabel: v.optional(v.string()),
-    activeSeriesCount: v.optional(v.number()),
     seedExistingSets: v.optional(v.boolean()),
     autoTrackFutureSets: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index('by_active', ['active'])
-    .index('by_ruleType', ['ruleType'])
     .index('by_ruleType_active', ['ruleType', 'active'])
     .index('by_categoryKey', ['categoryKey'])
     .index('by_active_categoryKey', ['active', 'categoryKey'])
     .index('by_setKey', ['setKey'])
     .index('by_active_setKey', ['active', 'setKey'])
-    .index('by_catalogProductKey', ['catalogProductKey'])
-    .index('by_active_catalogProductKey', ['active', 'catalogProductKey']),
+    .index('by_catalogProductKey', ['catalogProductKey']),
   pricingTrackedSeries: defineTable({
     key: v.string(),
     catalogProductKey: v.string(),
     categoryKey: v.string(),
     setKey: v.string(),
-    tcgtrackingCategoryId: v.number(),
-    tcgtrackingSetId: v.number(),
-    tcgplayerProductId: v.number(),
+    searchText: v.string(),
     name: v.string(),
     number: v.optional(v.string()),
     rarity: v.optional(v.string()),
@@ -249,37 +357,57 @@ export default defineSchema({
     active: v.boolean(),
     updatedAt: v.number(),
   })
-    .index('by_key', ['key'])
+    .index('by_updatedAt', ['updatedAt'])
     .index('by_active', ['active'])
     .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_active_updatedAt', ['active', 'updatedAt'])
+    .index('by_pricingSource_updatedAt', ['pricingSource', 'updatedAt'])
+    .index('by_active_pricingSource_updatedAt', [
+      'active',
+      'pricingSource',
+      'updatedAt',
+    ])
+    .index('by_printingKey_updatedAt', ['printingKey', 'updatedAt'])
+    .index('by_active_printingKey_updatedAt', [
+      'active',
+      'printingKey',
+      'updatedAt',
+    ])
     .index('by_setKey', ['setKey'])
+    .index('by_setKey_updatedAt', ['setKey', 'updatedAt'])
     .index('by_categoryKey', ['categoryKey'])
-    .index('by_active_setKey', ['active', 'setKey']),
+    .index('by_categoryKey_updatedAt', ['categoryKey', 'updatedAt'])
+    .index('by_active_setKey', ['active', 'setKey'])
+    .index('by_active_setKey_updatedAt', ['active', 'setKey', 'updatedAt'])
+    .index('by_active_categoryKey_updatedAt', [
+      'active',
+      'categoryKey',
+      'updatedAt',
+    ])
+    .searchIndex('search_searchText', {
+      searchField: 'searchText',
+      filterFields: [
+        'active',
+        'categoryKey',
+        'setKey',
+        'pricingSource',
+        'printingKey',
+      ],
+    }),
   pricingTrackedSeriesRules: defineTable({
     key: v.string(),
     ruleId: v.id('pricingTrackingRules'),
     seriesKey: v.string(),
-    catalogProductKey: v.string(),
     setKey: v.string(),
-    categoryKey: v.string(),
     active: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index('by_key', ['key'])
     .index('by_ruleId', ['ruleId'])
     .index('by_ruleId_active', ['ruleId', 'active'])
-    .index('by_seriesKey', ['seriesKey'])
-    .index('by_seriesKey_active', ['seriesKey', 'active'])
     .index('by_setKey', ['setKey']),
   pricingHistory: defineTable({
     seriesKey: v.string(),
-    catalogProductKey: v.string(),
-    catalogSkuKey: v.optional(v.string()),
-    setKey: v.string(),
-    categoryKey: v.string(),
-    printingKey: v.string(),
-    printingLabel: v.string(),
     capturedAt: v.number(),
     effectiveAt: v.number(),
     pricingSource: v.union(v.literal('sku'), v.literal('product_fallback')),
@@ -289,16 +417,7 @@ export default defineSchema({
     listingCount: v.optional(v.number()),
     manapoolPriceCents: v.optional(v.number()),
     manapoolQuantity: v.optional(v.number()),
-    snapshotFingerprint: v.string(),
-    sourcePricingUpdatedAt: v.optional(v.number()),
-    sourceSkuPricingUpdatedAt: v.optional(v.number()),
-  })
-    .index('by_seriesKey_effectiveAt', ['seriesKey', 'effectiveAt'])
-    .index('by_catalogProductKey_effectiveAt', [
-      'catalogProductKey',
-      'effectiveAt',
-    ])
-    .index('by_setKey_effectiveAt', ['setKey', 'effectiveAt']),
+  }).index('by_seriesKey_effectiveAt', ['seriesKey', 'effectiveAt']),
   pricingResolutionIssues: defineTable({
     key: v.string(),
     catalogProductKey: v.string(),
@@ -311,13 +430,46 @@ export default defineSchema({
     lastSeenAt: v.number(),
     occurrenceCount: v.number(),
     active: v.boolean(),
+    isIgnored: v.boolean(),
     ignoredAt: v.optional(v.number()),
   })
     .index('by_key', ['key'])
+    .index('by_lastSeenAt', ['lastSeenAt'])
+    .index('by_issueType_lastSeenAt', ['issueType', 'lastSeenAt'])
+    .index('by_isIgnored_lastSeenAt', ['isIgnored', 'lastSeenAt'])
+    .index('by_isIgnored_issueType_lastSeenAt', [
+      'isIgnored',
+      'issueType',
+      'lastSeenAt',
+    ])
     .index('by_active', ['active'])
-    .index('by_seriesKey', ['seriesKey'])
-    .index('by_catalogProductKey', ['catalogProductKey'])
-    .index('by_setKey', ['setKey']),
+    .index('by_active_lastSeenAt', ['active', 'lastSeenAt'])
+    .index('by_active_issueType_lastSeenAt', [
+      'active',
+      'issueType',
+      'lastSeenAt',
+    ])
+    .index('by_active_isIgnored_lastSeenAt', [
+      'active',
+      'isIgnored',
+      'lastSeenAt',
+    ])
+    .index('by_active_isIgnored_issueType_lastSeenAt', [
+      'active',
+      'isIgnored',
+      'issueType',
+      'lastSeenAt',
+    ])
+    .index('by_active_setKey', ['active', 'setKey'])
+    .index('by_active_setKey_lastSeenAt', ['active', 'setKey', 'lastSeenAt'])
+    .index('by_setKey', ['setKey'])
+    .index('by_setKey_lastSeenAt', ['setKey', 'lastSeenAt'])
+    .index('by_categoryKey_lastSeenAt', ['categoryKey', 'lastSeenAt'])
+    .index('by_active_categoryKey_lastSeenAt', [
+      'active',
+      'categoryKey',
+      'lastSeenAt',
+    ]),
   pricingDashboardStats: defineTable({
     key: v.string(),
     totalTrackedSeries: v.number(),
@@ -333,16 +485,162 @@ export default defineSchema({
     ruleId: v.id('pricingTrackingRules'),
     activeSeriesCount: v.number(),
     updatedAt: v.number(),
+  }).index('by_key', ['key']),
+  inventoryLocations: defineTable({
+    code: v.string(),
+    kind: inventoryLocationKindValidator,
+    parentLocationId: v.optional(v.id('inventoryLocations')),
+    pathSegments: v.array(v.string()),
+    depth: v.number(),
+    acceptsContents: v.boolean(),
+    displayName: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    active: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_code', ['code'])
+    .index('by_parentLocationId', ['parentLocationId'])
+    .index('by_active', ['active'])
+    .index('by_acceptsContents', ['acceptsContents'])
+    .index('by_kind', ['kind']),
+  inventoryLocationContents: defineTable({
+    locationId: v.id('inventoryLocations'),
+    inventoryClass: inventoryClassValidator,
+    referenceKind: inventoryReferenceKindValidator,
+    catalogProductKey: v.string(),
+    catalogSkuKey: v.optional(v.string()),
+    quantity: v.number(),
+    workflowStatus: inventoryWorkflowStatusValidator,
+    workflowTag: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    contentIdentityKey: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_locationId', ['locationId'])
+    .index('by_locationId_inventoryClass', ['locationId', 'inventoryClass'])
+    .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_catalogSkuKey', ['catalogSkuKey'])
+    .index('by_inventoryClass', ['inventoryClass'])
+    .index('by_inventoryClass_catalogProductKey', [
+      'inventoryClass',
+      'catalogProductKey',
+    ])
+    .index('by_inventoryClass_catalogSkuKey', [
+      'inventoryClass',
+      'catalogSkuKey',
+    ])
+    .index('by_workflowStatus', ['workflowStatus'])
+    .index('by_contentIdentityKey', ['contentIdentityKey']),
+  inventoryUnitDetails: defineTable({
+    contentId: v.id('inventoryLocationContents'),
+    unitKind: inventoryUnitKindValidator,
+    gradingCompany: v.string(),
+    gradeLabel: v.string(),
+    gradeSortValue: v.optional(v.number()),
+    certNumber: v.string(),
+    notes: v.optional(v.string()),
+    unitIdentityKey: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_contentId', ['contentId'])
+    .index('by_unitIdentityKey', ['unitIdentityKey']),
+  inventoryEvents: defineTable({
+    eventType: inventoryEventTypeValidator,
+    occurredAt: v.number(),
+    actor: v.optional(v.string()),
+    reasonCode: v.optional(v.string()),
+    sourceContentId: v.optional(v.id('inventoryLocationContents')),
+    targetContentId: v.optional(v.id('inventoryLocationContents')),
+    fromLocationId: v.optional(v.id('inventoryLocations')),
+    toLocationId: v.optional(v.id('inventoryLocations')),
+    inventoryClass: inventoryClassValidator,
+    referenceKind: inventoryReferenceKindValidator,
+    catalogProductKey: v.string(),
+    catalogSkuKey: v.optional(v.string()),
+    quantityDelta: v.number(),
+    quantityBefore: v.optional(v.number()),
+    quantityAfter: v.optional(v.number()),
+    workflowStatusBefore: v.optional(inventoryWorkflowStatusValidator),
+    workflowStatusAfter: v.optional(inventoryWorkflowStatusValidator),
+    workflowTagBefore: v.optional(v.string()),
+    workflowTagAfter: v.optional(v.string()),
+    unitIdentityKey: v.optional(v.string()),
+    metadataSnapshot: v.optional(v.any()),
+  })
+    .index('by_occurredAt', ['occurredAt'])
+    .index('by_catalogProductKey', ['catalogProductKey'])
+    .index('by_catalogSkuKey', ['catalogSkuKey'])
+    .index('by_inventoryClass_occurredAt', ['inventoryClass', 'occurredAt'])
+    .index('by_fromLocationId_occurredAt', ['fromLocationId', 'occurredAt'])
+    .index('by_toLocationId_occurredAt', ['toLocationId', 'occurredAt'])
+    .index('by_eventType', ['eventType']),
+  printerStations: defineTable({
+    key: v.string(),
+    name: v.string(),
+    status: printerStationStatusValidator,
+    lastSeenAt: v.optional(v.number()),
+    lastHeartbeatAt: v.optional(v.number()),
+    capabilities: v.array(printJobTypeValidator),
+    agentVersion: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
   })
     .index('by_key', ['key'])
-    .index('by_ruleId', ['ruleId']),
+    .index('by_status', ['status'])
+    .index('by_lastSeenAt', ['lastSeenAt']),
+  printJobs: defineTable({
+    stationKey: v.string(),
+    jobType: printJobTypeValidator,
+    status: printJobStatusValidator,
+    sourceKind: printSourceKindValidator,
+    sourceUrl: v.optional(v.string()),
+    storageId: v.optional(v.id('_storage')),
+    fileName: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    copies: v.number(),
+    dedupeKey: v.optional(v.string()),
+    orderId: v.optional(v.id('orders')),
+    shipmentId: v.optional(v.id('shipments')),
+    orderIds: v.optional(v.array(v.id('orders'))),
+    requestedAt: v.number(),
+    requestedBy: v.literal('app'),
+    claimedAt: v.optional(v.number()),
+    claimedByStationKey: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    failedAt: v.optional(v.number()),
+    failureCode: v.optional(v.string()),
+    failureMessage: v.optional(v.string()),
+    attemptCount: v.number(),
+    lastHeartbeatAt: v.optional(v.number()),
+    metadata: v.object({
+      orderNumber: v.optional(v.string()),
+      orderCount: v.optional(v.number()),
+      carrier: v.optional(v.string()),
+      service: v.optional(v.string()),
+    }),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_stationKey_status_requestedAt', [
+      'stationKey',
+      'status',
+      'requestedAt',
+    ])
+    .index('by_status_requestedAt', ['status', 'requestedAt'])
+    .index('by_orderId_createdAt', ['orderId', 'createdAt'])
+    .index('by_shipmentId_createdAt', ['shipmentId', 'createdAt'])
+    .index('by_dedupeKey', ['dedupeKey']),
   shipments: defineTable({
     orderId: v.optional(v.id('orders')),
     status: shippingStatusValidator, // Canonical EasyPost-derived order shipping status
     easypostShipmentId: v.string(),
     trackingStatus: v.optional(shippingStatusValidator), // Canonical EasyPost tracker status
     // Address verification
-    toAddress: v.optional(v.any()), // EasyPost to_address snapshot
+    toAddress: v.optional(easypostAddressSnapshotValidator), // EasyPost to_address snapshot
     toAddressId: v.optional(v.string()),
     fromAddressId: v.optional(v.string()),
     addressVerified: v.optional(v.boolean()),
@@ -364,25 +662,26 @@ export default defineSchema({
     rateCents: v.optional(v.number()),
     carrier: v.optional(v.string()),
     service: v.optional(v.string()),
-    shippingMethod: v.optional(v.string()), // Canonical internal shipping method: Letter | Parcel
+    shippingMethod: v.optional(shippingMethodValidator), // Canonical internal shipping method: Letter | Parcel
     easypostTrackerId: v.optional(v.string()),
     trackerPublicUrl: v.optional(v.string()),
     // Refund
-    refundStatus: v.optional(v.string()),
+    refundStatus: v.optional(shipmentRefundStatusValidator),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index('by_orderId', ['orderId'])
     .index('by_easypostShipmentId', ['easypostShipmentId'])
-    .index('by_status_createdAt', ['status', 'createdAt']),
+    .index('by_status_createdAt', ['status', 'createdAt'])
+    .index('by_orderId_status_createdAt', ['orderId', 'status', 'createdAt']),
   orders: defineTable({
     externalId: v.string(), // Manapool UUID
     orderNumber: v.string(), // Manapool UUID (same for now, label is for shipping)
-    channel: v.string(), // "manapool", "tcgplayer", "seeded"
+    channel: orderChannelValidator, // "manapool", "tcgplayer", "seeded"
     customerName: v.string(),
-    shippingStatus: v.optional(shippingStatusValidator), // Canonical shipping lifecycle/platform status
-    fulfillmentStatus: v.optional(v.boolean()), // internal flag set by our workflow
-    shippingMethod: v.string(), // Canonical internal shipping method: Letter | Parcel
+    shippingStatus: shippingStatusValidator, // Canonical shipping lifecycle/platform status
+    isFulfilled: v.boolean(), // internal flag set by our workflow
+    shippingMethod: shippingMethodValidator, // Canonical internal shipping method: Letter | Parcel
     shippingAddress: v.object({
       name: v.string(),
       line1: v.string(),
@@ -403,10 +702,10 @@ export default defineSchema({
         name: v.string(),
         quantity: v.number(),
         productId: v.string(),
-        mtgjsonId: v.string(),
+        mtgjsonId: v.optional(v.string()),
         priceCents: v.number(),
-        productType: v.string(), // mtg_single, mtg_sealed
-        set: v.string(), // set code
+        productType: orderItemProductTypeValidator, // mtg_single, mtg_sealed
+        set: v.optional(v.string()), // set code
         conditionId: v.optional(v.string()), // NM, LP, MP, HP, DMG (singles only)
         finishId: v.optional(v.string()), // NF, FO, EF (singles only)
         languageId: v.string(),
@@ -420,15 +719,12 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     trackingPublicUrl: v.optional(v.string()),
-    shipmentCount: v.optional(v.number()),
-    reviewShipmentCount: v.optional(v.number()),
+    shipmentCount: v.number(),
+    reviewShipmentCount: v.number(),
     activeShipment: v.optional(shipmentSummaryValidator),
     latestShipment: v.optional(shipmentSummaryValidator),
   })
     .index('by_externalId', ['externalId'])
     .index('by_createdAt', ['createdAt'])
-    .index('by_fulfillmentStatus_createdAt', [
-      'fulfillmentStatus',
-      'createdAt',
-    ]),
+    .index('by_isFulfilled_createdAt', ['isFulfilled', 'createdAt']),
 })
