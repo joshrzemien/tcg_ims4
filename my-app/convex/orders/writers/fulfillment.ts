@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation } from '../../_generated/server'
+import { mutation } from '../../lib/auth'
 import { normalizeShippingStatus } from '../../utils/shippingStatus'
 
 export const setFulfillmentStatus = mutation({

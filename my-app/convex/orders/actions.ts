@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { action } from '../_generated/server'
+import { action } from '../lib/auth'
 import { api, internal } from '../_generated/api'
 import { DEFAULT_PRINTER_STATION_KEY } from '../../shared/printing'
 import {

@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { query } from '../../_generated/server'
+import { query } from '../../lib/auth'
 
 function clampLimit(limit: number | undefined, fallback = 50, max = 200) {
   return Math.max(1, Math.min(limit ?? fallback, max))
@@ -9,7 +9,10 @@ function normalizeCatalogProductSearch(value: string) {
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
 }
 
-function getCatalogProductSearchName(product: { cleanName: string; name: string }) {
+function getCatalogProductSearchName(product: {
+  cleanName: string
+  name: string
+}) {
   return product.cleanName || product.name
 }
 

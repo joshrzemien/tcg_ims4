@@ -1,11 +1,9 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
-import { internalQuery, query } from '../../_generated/server'
-import {
-  
-  readMaterializedOrderShipmentState
-} from '../shipmentSummary'
-import type {OrderShipmentState} from '../shipmentSummary';
+import { internalQuery } from '../../_generated/server'
+import { query } from '../../lib/auth'
+import { readMaterializedOrderShipmentState } from '../shipmentSummary'
+import type { OrderShipmentState } from '../shipmentSummary'
 import type { Doc } from '../../_generated/dataModel'
 import type { DbCtx } from '../../lib/ctx'
 
@@ -16,11 +14,7 @@ export const orderListFilterValidator = v.union(
   v.literal('unfulfilled'),
 )
 
-type OrderListFilter =
-  | 'all'
-  | 'last7'
-  | 'last30'
-  | 'unfulfilled'
+type OrderListFilter = 'all' | 'last7' | 'last30' | 'unfulfilled'
 
 type OrderListSource = Pick<
   Doc<'orders'>,
@@ -47,7 +41,10 @@ function cutoffForFilter(
   switch (filter) {
     case 'last7':
     case 'last30':
-      if (typeof cutoffTimestamp !== 'number' || !Number.isFinite(cutoffTimestamp)) {
+      if (
+        typeof cutoffTimestamp !== 'number' ||
+        !Number.isFinite(cutoffTimestamp)
+      ) {
         throw new Error(`cutoffTimestamp is required for ${filter} filters`)
       }
       return cutoffTimestamp

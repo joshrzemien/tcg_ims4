@@ -1,7 +1,8 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { internal } from '../_generated/api'
-import { action, internalQuery } from '../_generated/server'
+import { internalQuery } from '../_generated/server'
+import { action } from '../lib/auth'
 import { getZeroDashboardStats } from './dashboardReadModel'
 import type { Id } from '../_generated/dataModel'
 
@@ -30,7 +31,9 @@ export const listIssuesPage = internalQuery({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, { paginationOpts }) => {
-    return await ctx.db.query('pricingResolutionIssues').paginate(paginationOpts)
+    return await ctx.db
+      .query('pricingResolutionIssues')
+      .paginate(paginationOpts)
   },
 })
 
@@ -132,10 +135,13 @@ export const rebuildDashboardReadModels = action({
     }
 
     const updatedAt = Date.now()
-    await ctx.runMutation(internal.pricing.mutations.replaceDashboardStatsSnapshot, {
-      stats,
-      updatedAt,
-    })
+    await ctx.runMutation(
+      internal.pricing.mutations.replaceDashboardStatsSnapshot,
+      {
+        stats,
+        updatedAt,
+      },
+    )
 
     let rebuiltRules = 0
     for (const ruleId of ruleIds) {
@@ -148,26 +154,26 @@ export const rebuildDashboardReadModels = action({
           page: Array<any>
           continueCursor: string | null
           isDone: boolean
-        } = await ctx.runQuery(
-          internal.pricing.admin.listActiveRuleJoinsPage,
-          {
-            ruleId,
-            paginationOpts: {
-              cursor: joinsCursor,
-              numItems: REBUILD_PAGE_SIZE,
-            },
+        } = await ctx.runQuery(internal.pricing.admin.listActiveRuleJoinsPage, {
+          ruleId,
+          paginationOpts: {
+            cursor: joinsCursor,
+            numItems: REBUILD_PAGE_SIZE,
           },
-        )
+        })
 
         activeSeriesCount += joinsPage.page.length
         joinsCursor = joinsPage.continueCursor
         joinsDone = joinsPage.isDone
       }
 
-      await ctx.runMutation(internal.pricing.mutations.rebuildRuleDashboardEntry, {
-        ruleId,
-        activeSeriesCount,
-      })
+      await ctx.runMutation(
+        internal.pricing.mutations.rebuildRuleDashboardEntry,
+        {
+          ruleId,
+          activeSeriesCount,
+        },
+      )
       rebuiltRules += 1
     }
 

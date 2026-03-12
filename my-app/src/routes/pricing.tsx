@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { startTransition, useCallback } from 'react'
 import { AppShell } from '../components/AppShell'
 import { PricingDashboard } from '../features/pricing/PricingDashboard'
+import { requireBackendAuth } from '~/lib/auth'
 import { normalizeSearchInput } from '~/lib/search'
 
 export type PricingRouteSearch = {
@@ -9,7 +10,9 @@ export type PricingRouteSearch = {
   active?: '1' | '0'
 }
 
-export function validatePricingSearch(search: Record<string, unknown>): PricingRouteSearch {
+export function validatePricingSearch(
+  search: Record<string, unknown>,
+): PricingRouteSearch {
   const normalizedQuery =
     typeof search.q === 'string' ? normalizeSearchInput(search.q) : ''
   const active =
@@ -22,6 +25,8 @@ export function validatePricingSearch(search: Record<string, unknown>): PricingR
 }
 
 export const Route = createFileRoute('/pricing')({
+  beforeLoad: async ({ context }) =>
+    await requireBackendAuth(context.convexQueryClient),
   validateSearch: validatePricingSearch,
   component: PricingPage,
 })

@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
-import { internalMutation, mutation } from '../../_generated/server'
+import { internalMutation } from '../../_generated/server'
+import { mutation } from '../../lib/auth'
 import {
   deriveOrderShippingMethod,
   deriveShipmentShippingMethod,
@@ -23,9 +24,7 @@ import {
 import { shipmentsForOrder } from '../writers/orderUpsert'
 import type { Doc, Id } from '../../_generated/dataModel'
 
-function buildLatestShipmentByOrderId(
-  shipments: Array<Doc<'shipments'>>,
-) {
+function buildLatestShipmentByOrderId(shipments: Array<Doc<'shipments'>>) {
   const latestShipmentByOrderId = new Map<Id<'orders'>, Doc<'shipments'>>()
 
   for (const shipment of shipments) {
@@ -57,7 +56,10 @@ export const backfillShippingMethods = mutation({
 
     for (const shipment of shipments) {
       const nextShippingMethod = deriveShipmentShippingMethod(shipment)
-      if (nextShippingMethod && shipment.shippingMethod !== nextShippingMethod) {
+      if (
+        nextShippingMethod &&
+        shipment.shippingMethod !== nextShippingMethod
+      ) {
         await ctx.db.patch('shipments', shipment._id, {
           shippingMethod: nextShippingMethod,
           updatedAt: Date.now(),
@@ -110,7 +112,10 @@ export const backfillCatalogLinks = internalMutation({
     let updated = 0
 
     for (const order of page.page) {
-      const nextItems = enrichOrderItemsWithCatalogLinks(order.items, lookupMaps)
+      const nextItems = enrichOrderItemsWithCatalogLinks(
+        order.items,
+        lookupMaps,
+      )
       if (!orderItemsNeedCatalogUpdate(order.items, nextItems)) {
         continue
       }

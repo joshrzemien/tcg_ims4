@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
-import { action, internalAction } from '../../_generated/server'
+import { internalAction } from '../../_generated/server'
+import { action } from '../../lib/auth'
 import { api, internal } from '../../_generated/api'
 import { refreshCatalogMetadata } from './metadataRefresh'
 import type { ActionCtx } from '../../_generated/server'

@@ -1,6 +1,7 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
-import { internalQuery, query } from '../../_generated/server'
+import { internalQuery } from '../../_generated/server'
+import { query } from '../../lib/auth'
 import { paginateFilteredQuery } from './pagination'
 
 const pricingResolutionIssueTypeValidator = v.union(
@@ -66,7 +67,13 @@ export const listResolutionIssues = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    if (args.activeOnly && !args.includeIgnored && args.issueType && !args.setKey && !args.categoryKey) {
+    if (
+      args.activeOnly &&
+      !args.includeIgnored &&
+      args.issueType &&
+      !args.setKey &&
+      !args.categoryKey
+    ) {
       return await ctx.db
         .query('pricingResolutionIssues')
         .withIndex('by_active_isIgnored_issueType_lastSeenAt', (q) =>
@@ -79,7 +86,12 @@ export const listResolutionIssues = query({
         .paginate(args.paginationOpts)
     }
 
-    if (args.activeOnly && args.issueType && !args.setKey && !args.categoryKey) {
+    if (
+      args.activeOnly &&
+      args.issueType &&
+      !args.setKey &&
+      !args.categoryKey
+    ) {
       return await ctx.db
         .query('pricingResolutionIssues')
         .withIndex('by_active_issueType_lastSeenAt', (q) =>
@@ -89,7 +101,12 @@ export const listResolutionIssues = query({
         .paginate(args.paginationOpts)
     }
 
-    if (!args.includeIgnored && args.issueType && !args.setKey && !args.categoryKey) {
+    if (
+      !args.includeIgnored &&
+      args.issueType &&
+      !args.setKey &&
+      !args.categoryKey
+    ) {
       return await ctx.db
         .query('pricingResolutionIssues')
         .withIndex('by_isIgnored_issueType_lastSeenAt', (q) =>
@@ -109,7 +126,12 @@ export const listResolutionIssues = query({
         .paginate(args.paginationOpts)
     }
 
-    if (args.activeOnly && !args.includeIgnored && !args.setKey && !args.categoryKey) {
+    if (
+      args.activeOnly &&
+      !args.includeIgnored &&
+      !args.setKey &&
+      !args.categoryKey
+    ) {
       return await ctx.db
         .query('pricingResolutionIssues')
         .withIndex('by_active_isIgnored_lastSeenAt', (q) =>
@@ -122,9 +144,7 @@ export const listResolutionIssues = query({
     if (!args.includeIgnored && !args.setKey && !args.categoryKey) {
       return await ctx.db
         .query('pricingResolutionIssues')
-        .withIndex('by_isIgnored_lastSeenAt', (q) =>
-          q.eq('isIgnored', false),
-        )
+        .withIndex('by_isIgnored_lastSeenAt', (q) => q.eq('isIgnored', false))
         .order('desc')
         .paginate(args.paginationOpts)
     }

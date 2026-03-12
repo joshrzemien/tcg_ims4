@@ -12,4 +12,3 @@ playwright-report
 .env
 .env.local
 .env.sentry-build-plugin
-docker-compose.env

@@ -1,5 +1,6 @@
 import { internal } from '../../_generated/api'
-import { action, internalAction } from '../../_generated/server'
+import { internalAction } from '../../_generated/server'
+import { action } from '../../lib/auth'
 import { chunkArray } from '../../lib/collections'
 import { filterAllowedCatalogCategories } from '../config'
 import { mapCategory, mapSet } from '../shared/mappers'

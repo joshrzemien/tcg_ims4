@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
-import { internalQuery, query } from '../_generated/server'
+import { internalQuery } from '../_generated/server'
+import { query } from '../lib/auth'
 import {
   DEFAULT_PRINTER_STATION_KEY,
   DEFAULT_PRINTER_STATION_NAME,

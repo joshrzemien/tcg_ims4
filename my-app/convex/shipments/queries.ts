@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { query } from '../_generated/server'
+import { query } from '../lib/auth'
 import {
   SHIPPING_STATUS_VALUES,
   normalizeShippingStatus,
@@ -47,10 +47,7 @@ export const listRefreshCandidates = query({
   },
   handler: async (ctx, { limit }) => {
     const maxResults = Math.max(1, Math.min(limit ?? 100, 250))
-    const candidatesById = new Map<
-      Doc<'shipments'>['_id'],
-      Doc<'shipments'>
-    >()
+    const candidatesById = new Map<Doc<'shipments'>['_id'], Doc<'shipments'>>()
 
     await Promise.all(
       REFRESHABLE_SHIPMENT_STATUSES.map(async (status) => {
@@ -100,20 +97,19 @@ export const listStandalone = query({
     const shipments = await ctx.db
       .query('shipments')
       .withIndex('by_orderId_status_createdAt', (q) =>
-        q.eq('orderId', undefined).eq('status', 'purchased').gte(
-          'createdAt',
-          recentOrderWithoutTrackingCutoff,
-        ),
+        q
+          .eq('orderId', undefined)
+          .eq('status', 'purchased')
+          .gte('createdAt', recentOrderWithoutTrackingCutoff),
       )
       .order('desc')
       .take(maxResults)
 
-    const standaloneShipments = shipments.filter(
-      (shipment) =>
-        isRecentPurchasedShipmentWithoutTrackingUpdate(
-          shipment,
-          recentOrderWithoutTrackingCutoff,
-        ),
+    const standaloneShipments = shipments.filter((shipment) =>
+      isRecentPurchasedShipmentWithoutTrackingUpdate(
+        shipment,
+        recentOrderWithoutTrackingCutoff,
+      ),
     )
 
     return standaloneShipments

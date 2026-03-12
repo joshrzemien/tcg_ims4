@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
-import { query } from '../_generated/server'
+import { internalQuery } from '../_generated/server'
+import { query } from '../lib/auth'
 import { loadSyncCandidates } from './syncCandidates'
 import { getAllowedCatalogCategoryIds } from './config'
 import { getSyncPriority } from './syncState'
@@ -106,6 +107,18 @@ export const getSetByKey = query({
   },
 })
 
+export const getSetByKeyInternal = internalQuery({
+  args: {
+    setKey: v.string(),
+  },
+  handler: async (ctx, { setKey }) => {
+    return await ctx.db
+      .query('catalogSets')
+      .withIndex('by_key', (q) => q.eq('key', setKey))
+      .unique()
+  },
+})
+
 export const listCategories = query({
   args: {
     search: v.optional(v.string()),
@@ -159,7 +172,10 @@ export const listSets = query({
                 q.eq('categoryKey', categoryKey),
               )
               .take(maxResults)
-          : await ctx.db.query('catalogSets').withIndex('by_name').take(maxResults)
+          : await ctx.db
+              .query('catalogSets')
+              .withIndex('by_name')
+              .take(maxResults)
 
     return sets.map(mapSetSummary)
   },
@@ -228,11 +244,10 @@ export const listSyncCandidates = query({
       now,
     })
 
-    return orderedCandidates
-      .map((set) => ({
-        ...set,
-        syncPriority: getSyncPriority(set),
-      }))
+    return orderedCandidates.map((set) => ({
+      ...set,
+      syncPriority: getSyncPriority(set),
+    }))
   },
 })
 

@@ -1,6 +1,7 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
-import { internalQuery, query } from '../../_generated/server'
+import { internalQuery } from '../../_generated/server'
+import { query } from '../../lib/auth'
 import { categoryRuleAppliesToSet, isSetInRuleScope } from '../ruleScope'
 import { paginateFilteredQuery } from './pagination'
 
@@ -90,7 +91,12 @@ export const listTrackedSeries = query({
     return await paginateFilteredQuery({
       paginationOpts: args.paginationOpts,
       fetchPage: async (paginationOpts) => {
-        if (args.activeOnly && args.pricingSource && !args.setKey && !args.categoryKey) {
+        if (
+          args.activeOnly &&
+          args.pricingSource &&
+          !args.setKey &&
+          !args.categoryKey
+        ) {
           return await ctx.db
             .query('pricingTrackedSeries')
             .withIndex('by_active_pricingSource_updatedAt', (q) =>
@@ -110,7 +116,12 @@ export const listTrackedSeries = query({
             .paginate(paginationOpts)
         }
 
-        if (args.activeOnly && args.printingKey && !args.setKey && !args.categoryKey) {
+        if (
+          args.activeOnly &&
+          args.printingKey &&
+          !args.setKey &&
+          !args.categoryKey
+        ) {
           return await ctx.db
             .query('pricingTrackedSeries')
             .withIndex('by_active_printingKey_updatedAt', (q) =>
@@ -255,7 +266,9 @@ export const getRelevantRulesForSet = internalQuery({
     return {
       set,
       setRules: scopedRules.filter((rule) => rule.ruleType === 'set'),
-      manualRules: scopedRules.filter((rule) => rule.ruleType === 'manual_product'),
+      manualRules: scopedRules.filter(
+        (rule) => rule.ruleType === 'manual_product',
+      ),
       categoryRules: categoryRules.filter((rule) =>
         categoryRuleAppliesToSet(rule, set),
       ),

@@ -1,12 +1,15 @@
 import { v } from 'convex/values'
-import { query } from '../_generated/server'
+import { query } from '../lib/auth'
 import { buildInventoryAggregateRows } from './lib/readModels'
 import { inventoryClassValidator } from './shared'
 import type { Doc } from '../_generated/dataModel'
 
 type ContentDoc = Doc<'inventoryLocationContents'>
 
-async function buildAggregateRows(ctx: { db: any }, contents: Array<ContentDoc>) {
+async function buildAggregateRows(
+  ctx: { db: any },
+  contents: Array<ContentDoc>,
+) {
   return await buildInventoryAggregateRows(ctx, contents)
 }
 
@@ -24,7 +27,9 @@ async function listContents(
     contents = await ctx.db
       .query('inventoryLocationContents')
       .withIndex('by_inventoryClass_catalogSkuKey', (q: any) =>
-        q.eq('inventoryClass', args.inventoryClass).eq('catalogSkuKey', args.catalogSkuKey),
+        q
+          .eq('inventoryClass', args.inventoryClass)
+          .eq('catalogSkuKey', args.catalogSkuKey),
       )
       .collect()
   } else if (args.inventoryClass && args.catalogProductKey) {
@@ -39,7 +44,9 @@ async function listContents(
   } else if (args.catalogSkuKey) {
     contents = await ctx.db
       .query('inventoryLocationContents')
-      .withIndex('by_catalogSkuKey', (q: any) => q.eq('catalogSkuKey', args.catalogSkuKey))
+      .withIndex('by_catalogSkuKey', (q: any) =>
+        q.eq('catalogSkuKey', args.catalogSkuKey),
+      )
       .collect()
   } else if (args.catalogProductKey) {
     contents = await ctx.db

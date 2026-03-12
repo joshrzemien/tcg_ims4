@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { action } from '../_generated/server'
+import { action } from '../lib/auth'
 import { internal } from '../_generated/api'
 import { DEFAULT_PRINTER_STATION_KEY } from '../../shared/printing'
 import type { Id } from '../_generated/dataModel'
@@ -89,19 +89,16 @@ export const queueUploadedPdf = action({
       printJobId: Id<'printJobs'>
       printStatus: 'queued'
       stationKey: string
-    } = await ctx.runMutation(
-      internal.printing.mutations.enqueueJob,
-      {
-        stationKey: DEFAULT_PRINTER_STATION_KEY,
-        jobType: 'ad_hoc_document',
-        sourceKind: 'stored_document',
-        storageId,
-        fileName: normalizedFileName,
-        mimeType: 'application/pdf',
-        copies: normalizedCopies,
-        metadata: {},
-      },
-    )
+    } = await ctx.runMutation(internal.printing.mutations.enqueueJob, {
+      stationKey: DEFAULT_PRINTER_STATION_KEY,
+      jobType: 'ad_hoc_document',
+      sourceKind: 'stored_document',
+      storageId,
+      fileName: normalizedFileName,
+      mimeType: 'application/pdf',
+      copies: normalizedCopies,
+      metadata: {},
+    })
 
     return {
       ...printDispatch,

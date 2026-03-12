@@ -1,9 +1,6 @@
-import { mutation } from '../../_generated/server'
+import { mutation } from '../../lib/auth'
 import { applyDashboardStatsDelta } from '../dashboardReadModel'
-import {
-  buildSyncIssueKey,
-  isActiveUnignoredIssue,
-} from '../shared/keys'
+import { buildSyncIssueKey, isActiveUnignoredIssue } from '../shared/keys'
 
 export const backfillSyncIssues = mutation({
   args: {},
@@ -26,9 +23,9 @@ export const backfillSyncIssues = mutation({
 
       const details = {
         setName: set.name,
-        message: set.lastPricingSyncError ?? set.lastSyncError ?? 'Unknown sync error',
-        syncStage:
-          set.pricingSyncStatus === 'error' ? 'pricing' : 'catalog',
+        message:
+          set.lastPricingSyncError ?? set.lastSyncError ?? 'Unknown sync error',
+        syncStage: set.pricingSyncStatus === 'error' ? 'pricing' : 'catalog',
         syncStatus: set.syncStatus,
         pricingSyncStatus: set.pricingSyncStatus,
       }

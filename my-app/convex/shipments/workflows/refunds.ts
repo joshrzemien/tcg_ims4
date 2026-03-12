@@ -1,6 +1,6 @@
 import { v } from 'convex/values'
 import { api, internal } from '../../_generated/api'
-import { action } from '../../_generated/server'
+import { action } from '../../lib/auth'
 import {
   getNonRefundableEasyPostLetterShipmentMessage,
   isNonRefundableEasyPostLetterShipment,
@@ -27,7 +27,9 @@ export const refundLabel = action({
         ) ?? null
 
       if (!targetShipment) {
-        throw new Error(`Shipment ${easypostShipmentId} not found for this order.`)
+        throw new Error(
+          `Shipment ${easypostShipmentId} not found for this order.`,
+        )
       }
 
       if (!shipmentHasPurchasedLabel(targetShipment)) {
